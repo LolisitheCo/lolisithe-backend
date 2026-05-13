@@ -98,7 +98,7 @@ const createCheckout = async (req, res) => {
     /* ===================================== */
 
     const response = await axios.post(
-      "https://payments.yoco.com/api/checkouts",
+      "https://online.yoco.com/v1/checkout/sessions",
       {
         amount,
         currency: "ZAR",
@@ -131,7 +131,8 @@ const createCheckout = async (req, res) => {
     );
 
     return res.json({
-      url: response.data.redirectUrl,
+      url: response.data.redirectUrl
+        || response.data.url,
     });
 
   } catch (err) {
