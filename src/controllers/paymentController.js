@@ -4,31 +4,39 @@ const crypto = require("crypto");
 
 if (!admin.apps.length) {
   admin.initializeApp({
-    credential: admin.credential.applicationDefault(),
+    credential: admin.credential.cert({
+      projectId: process.env.FIREBASE_PROJECT_ID,
+      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+      privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n"),
+    }),
   });
 }
 
 const db = admin.firestore();
 
 const YOCO_SECRET_KEY = process.env.YOCO_SECRET_KEY;
-const YOCO_WEBHOOK_SECRET = process.env.YOCO_WEBHOOK_SECRET;
-const FRONTEND_URL = "https://lolisitheco.co.za";
+const YOCO_WEBHOOK_SECRET =
+  process.env.YOCO_WEBHOOK_SECRET;
 
-/* ============================= */
-/* 📅 PLAN CONFIG */
-/* ============================= */
+const FRONTEND_URL =
+  "https://lolisitheco.co.za";
+
+/* ===================================== */
+/* SUBSCRIPTION DAYS */
+/* ===================================== */
+
 const SUB_DAYS = {
   hustler: 30,
   business: 30,
 };
 
-/* ============================= */
-/* 💳 CREATE CHECKOUT */
-/* ============================= */
+/* ===================================== */
+/* CREATE CHECKOUT */
+/* ===================================== */
+
 const createCheckout = async (req, res) => {
   try {
-
-        console.log("REQ BODY:", req.body);
+    console.log("REQ BODY:", req.body);
 
     const {
       email,
@@ -47,52 +55,37 @@ const createCheckout = async (req, res) => {
     let amount = 0;
     let name = "";
 
-    /* ============================= */
-    /* SUBSCRIPTIONS */
-    /* ============================= */
+    /* ================= SUBSCRIPTIONS ================= */
 
     if (type === "subscription") {
-
       if (plan === "hustler") {
         amount = 19900;
         name = "Hustler Plan";
-      }
-
-      else if (plan === "business") {
+      } else if (plan === "business") {
         amount = 39900;
         name = "Business Plan";
-      }
-
-      else {
+      } else {
         return res.status(400).json({
           error: "Invalid plan",
         });
       }
     }
 
-    /* ============================= */
-    /* VERIFIED SELLER */
-    /* ============================= */
+    /* ================= VERIFIED ================= */
 
-    else if (
-      type === "verify_seller"
-    ) {
+    else if (type === "verify_seller") {
       amount = 10000;
       name = "Verified Seller";
     }
 
-    /* ============================= */
-    /* FEATURED LISTING */
-    /* ============================= */
+    /* ================= FEATURED ================= */
 
     else if (type === "feature") {
       amount = 1000;
       name = "Featured Listing";
     }
 
-    /* ============================= */
-    /* INVALID */
-    /* ============================= */
+    /* ================= INVALID ================= */
 
     else {
       return res.status(400).json({
@@ -100,13 +93,12 @@ const createCheckout = async (req, res) => {
       });
     }
 
-    /* ============================= */
-    /* CREATE YOCO CHECKOUT */
-    /* ============================= */
+    /* ===================================== */
+    /* YOCO CHECKOUT */
+    /* ===================================== */
 
     const response = await axios.post(
       "https://payments.yoco.com/api/checkouts",
-
       {
         amount,
         currency: "ZAR",
@@ -122,26 +114,13 @@ const createCheckout = async (req, res) => {
           email,
           plan: plan || null,
           type,
-          listingId:
-            listingId || null,
+          listingId: listingId || null,
         },
-
-        items: [
-          {
-            name,
-            quantity: 1,
-            amount,
-          },
-        ],
       },
-
       {
         headers: {
-          Authorization:
-            `Bearer ${YOCO_SECRET_KEY}`,
-
-          "Content-Type":
-            "application/json",
+          Authorization: `Bearer ${YOCO_SECRET_KEY}`,
+          "Content-Type": "application/json",
         },
       }
     );
@@ -159,137 +138,202 @@ const createCheckout = async (req, res) => {
 
     console.error(
       "❌ YOCO ERROR:",
-      err.response?.data ||
-      err.message
+      err.response?.data || err.message
     );
 
     return res.status(500).json({
-      error: "Payment failed",
+      error:
+        err.response?.data ||
+        "Payment failed",
     });
   }
 };
-/* ============================= */
-/* 🔐 VERIFY WEBHOOK SIGNATURE */
-/* ============================= */
+
+/* ===================================== */
+/* VERIFY WEBHOOK */
+/* ===================================== */
+
 const verifyWebhook = (req) => {
-  const signature = req.headers["webhook-signature"];
+  const signature =
+    req.headers["webhook-signature"];
 
   const expected = crypto
-    .createHmac("sha256", YOCO_WEBHOOK_SECRET)
+    .createHmac(
+      "sha256",
+      YOCO_WEBHOOK_SECRET
+    )
     .update(req.body)
     .digest("hex");
 
   if (signature !== expected) {
-    throw new Error("Invalid webhook signature");
+    throw new Error(
+      "Invalid webhook signature"
+    );
   }
 };
 
-/* ============================= */
-/* 📅 GET EXPIRY DATE */
-/* ============================= */
+/* ===================================== */
+/* GET EXPIRY DATE */
+/* ===================================== */
+
 const getExpiryDate = (plan) => {
   const days = SUB_DAYS[plan] || 30;
+
   const d = new Date();
+
   d.setDate(d.getDate() + days);
+
   return d;
 };
 
-/* ============================= */
-/* 🔔 HANDLE WEBHOOK */
-/* ============================= */
+/* ===================================== */
+/* HANDLE WEBHOOK */
+/* ===================================== */
+
 const handleWebhook = async (req, res) => {
   try {
-    // 🔐 verify signature
+
     verifyWebhook(req);
 
-    const event = JSON.parse(req.body.toString());
+    const event = JSON.parse(
+      req.body.toString()
+    );
 
-    // 🛑 prevent duplicate processing
-    const eventRef = db.collection("webhooks").doc(event.id);
+    console.log("🔥 WEBHOOK:", event);
+
+    const eventRef =
+      db.collection("webhooks").doc(event.id);
+
     const exists = await eventRef.get();
 
-    if (exists.exists) return res.sendStatus(200);
-
-    await eventRef.set({ createdAt: new Date() });
-
-    // ✅ only process successful payments
-    if (event.type !== "payment.succeeded") {
+    if (exists.exists) {
       return res.sendStatus(200);
     }
 
-    const metadata = event.data?.metadata;
+    await eventRef.set({
+      createdAt: new Date(),
+    });
+
+    if (
+      event.type !==
+      "payment.succeeded"
+    ) {
+      return res.sendStatus(200);
+    }
+
+    const metadata =
+      event.payload?.metadata ||
+      event.data?.metadata;
 
     if (!metadata) {
-      console.log("⚠️ No metadata found");
+      console.log("⚠️ No metadata");
       return res.sendStatus(200);
     }
 
-    const { userId, plan, type, listingId } = metadata;
+    const {
+      userId,
+      plan,
+      type,
+      listingId,
+    } = metadata;
 
-    console.log("🔥 PAYMENT SUCCESS:", metadata);
-
-    const userRef = db.collection("users").doc(userId);
+    const userRef =
+      db.collection("users").doc(userId);
 
     /* ================= SUBSCRIPTION ================= */
+
     if (type === "subscription") {
       await userRef.set(
         {
           plan,
           subscriptionActive: true,
-          subscriptionExpires: getExpiryDate(plan),
+          subscriptionExpires:
+            getExpiryDate(plan),
         },
         { merge: true }
       );
     }
 
-    /* ================= VERIFY ================= */
+    /* ================= VERIFIED ================= */
+
     if (type === "verify_seller") {
       await userRef.set(
-        { verified: true },
-        { merge: true }
-      );
-    }
-
-    /* ================= FEATURE ================= */
-    if (type === "feature" && listingId) {
-      await db.collection("products").doc(listingId).set(
         {
-          featured: true,
-          featuredAt: new Date(),
+          verified: true,
         },
         { merge: true }
       );
     }
 
-    res.sendStatus(200);
+    /* ================= FEATURED ================= */
+
+    if (
+      type === "feature" &&
+      listingId
+    ) {
+      await db
+        .collection("products")
+        .doc(listingId)
+        .set(
+          {
+            featured: true,
+            featuredAt: new Date(),
+          },
+          { merge: true }
+        );
+    }
+
+    return res.sendStatus(200);
 
   } catch (err) {
-    console.error("❌ Webhook error:", err.message);
-    res.sendStatus(400);
+
+    console.error(
+      "❌ WEBHOOK ERROR:",
+      err.message
+    );
+
+    return res.sendStatus(400);
   }
 };
 
-/* ============================= */
-/* 📊 CHECK USER STATUS */
-/* ============================= */
-const checkUserStatus = async (req, res) => {
+/* ===================================== */
+/* CHECK USER STATUS */
+/* ===================================== */
+
+const checkUserStatus = async (
+  req,
+  res
+) => {
   try {
+
     const { userId } = req.query;
 
     if (!userId) {
-      return res.status(400).json({ error: "Missing userId" });
+      return res.status(400).json({
+        error: "Missing userId",
+      });
     }
 
-    const userDoc = await db.collection("users").doc(userId).get();
+    const userDoc = await db
+      .collection("users")
+      .doc(userId)
+      .get();
 
     if (!userDoc.exists) {
-      return res.status(404).json({ error: "User not found" });
+      return res.status(404).json({
+        error: "User not found",
+      });
     }
 
-    res.json(userDoc.data());
+    return res.json(userDoc.data());
+
   } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ error: "Failed to fetch user status" });
+
+    console.error(err);
+
+    return res.status(500).json({
+      error: "Failed to fetch status",
+    });
   }
 };
 
