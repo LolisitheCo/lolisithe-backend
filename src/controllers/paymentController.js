@@ -36,6 +36,7 @@ const SUB_DAYS = {
 
 const createCheckout = async (req, res) => {
   try {
+
     console.log("REQ BODY:", req.body);
 
     const {
@@ -58,13 +59,18 @@ const createCheckout = async (req, res) => {
     /* ================= SUBSCRIPTIONS ================= */
 
     if (type === "subscription") {
+
       if (plan === "hustler") {
         amount = 19900;
         name = "Hustler Plan";
-      } else if (plan === "business") {
+      }
+
+      else if (plan === "business") {
         amount = 39900;
         name = "Business Plan";
-      } else {
+      }
+
+      else {
         return res.status(400).json({
           error: "Invalid plan",
         });
@@ -98,7 +104,8 @@ const createCheckout = async (req, res) => {
     /* ===================================== */
 
     const response = await axios.post(
-      "https://online.yoco.com/v1/checkout/sessions",
+      "https://payments.yoco.com/api/checkouts/sessions",
+
       {
         amount,
         currency: "ZAR",
@@ -116,11 +123,27 @@ const createCheckout = async (req, res) => {
           type,
           listingId: listingId || null,
         },
+
+        lineItems: [
+          {
+            displayName: name,
+
+            quantity: 1,
+
+            pricingDetails: {
+              price: amount,
+            },
+          },
+        ],
       },
+
       {
         headers: {
-          Authorization: `Bearer ${YOCO_SECRET_KEY}`,
-          "Content-Type": "application/json",
+          Authorization:
+            `Bearer ${YOCO_SECRET_KEY}`,
+
+          "Content-Type":
+            "application/json",
         },
       }
     );
@@ -131,8 +154,9 @@ const createCheckout = async (req, res) => {
     );
 
     return res.json({
-      url: response.data.redirectUrl
-        || response.data.url,
+      url:
+        response.data.redirectUrl ||
+        response.data.url,
     });
 
   } catch (err) {
@@ -155,6 +179,7 @@ const createCheckout = async (req, res) => {
 /* ===================================== */
 
 const verifyWebhook = (req) => {
+
   const signature =
     req.headers["webhook-signature"];
 
@@ -178,11 +203,15 @@ const verifyWebhook = (req) => {
 /* ===================================== */
 
 const getExpiryDate = (plan) => {
-  const days = SUB_DAYS[plan] || 30;
+
+  const days =
+    SUB_DAYS[plan] || 30;
 
   const d = new Date();
 
-  d.setDate(d.getDate() + days);
+  d.setDate(
+    d.getDate() + days
+  );
 
   return d;
 };
@@ -191,7 +220,11 @@ const getExpiryDate = (plan) => {
 /* HANDLE WEBHOOK */
 /* ===================================== */
 
-const handleWebhook = async (req, res) => {
+const handleWebhook = async (
+  req,
+  res
+) => {
+
   try {
 
     verifyWebhook(req);
@@ -200,12 +233,17 @@ const handleWebhook = async (req, res) => {
       req.body.toString()
     );
 
-    console.log("🔥 WEBHOOK:", event);
+    console.log(
+      "🔥 WEBHOOK:",
+      event
+    );
 
     const eventRef =
-      db.collection("webhooks").doc(event.id);
+      db.collection("webhooks")
+        .doc(event.id);
 
-    const exists = await eventRef.get();
+    const exists =
+      await eventRef.get();
 
     if (exists.exists) {
       return res.sendStatus(200);
@@ -227,7 +265,11 @@ const handleWebhook = async (req, res) => {
       event.data?.metadata;
 
     if (!metadata) {
-      console.log("⚠️ No metadata");
+
+      console.log(
+        "⚠️ No metadata"
+      );
+
       return res.sendStatus(200);
     }
 
@@ -239,15 +281,19 @@ const handleWebhook = async (req, res) => {
     } = metadata;
 
     const userRef =
-      db.collection("users").doc(userId);
+      db.collection("users")
+        .doc(userId);
 
     /* ================= SUBSCRIPTION ================= */
 
     if (type === "subscription") {
+
       await userRef.set(
         {
           plan,
+
           subscriptionActive: true,
+
           subscriptionExpires:
             getExpiryDate(plan),
         },
@@ -258,6 +304,7 @@ const handleWebhook = async (req, res) => {
     /* ================= VERIFIED ================= */
 
     if (type === "verify_seller") {
+
       await userRef.set(
         {
           verified: true,
@@ -272,6 +319,7 @@ const handleWebhook = async (req, res) => {
       type === "feature" &&
       listingId
     ) {
+
       await db
         .collection("products")
         .doc(listingId)
@@ -305,35 +353,43 @@ const checkUserStatus = async (
   req,
   res
 ) => {
+
   try {
 
-    const { userId } = req.query;
+    const { userId } =
+      req.query;
 
     if (!userId) {
+
       return res.status(400).json({
         error: "Missing userId",
       });
     }
 
-    const userDoc = await db
-      .collection("users")
-      .doc(userId)
-      .get();
+    const userDoc =
+      await db
+        .collection("users")
+        .doc(userId)
+        .get();
 
     if (!userDoc.exists) {
+
       return res.status(404).json({
         error: "User not found",
       });
     }
 
-    return res.json(userDoc.data());
+    return res.json(
+      userDoc.data()
+    );
 
   } catch (err) {
 
     console.error(err);
 
     return res.status(500).json({
-      error: "Failed to fetch status",
+      error:
+        "Failed to fetch status",
     });
   }
 };
