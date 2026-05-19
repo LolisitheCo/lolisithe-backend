@@ -104,7 +104,7 @@ const createCheckout = async (req, res) => {
     /* ===================================== */
 
     const response = await axios.post(
-      "https://payments.yoco.com/api/checkouts/sessions",
+      "https://payments.yoco.com/api/checkouts",
 
       {
         amount,
