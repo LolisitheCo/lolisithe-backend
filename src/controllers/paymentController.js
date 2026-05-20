@@ -11,34 +11,26 @@ if (!admin.apps.length) {
     credential: admin.credential.cert({
       projectId: process.env.FIREBASE_PROJECT_ID,
       clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-      privateKey: privateKey,
+      privateKey,
     }),
   });
 }
 
 const db = admin.firestore();
 
-/* ================= ENV ================= */
+/* ================= CONFIG ================= */
 
 const YOCO_SECRET_KEY = process.env.YOCO_SECRET_KEY;
 const YOCO_WEBHOOK_SECRET = process.env.YOCO_WEBHOOK_SECRET;
+
 const FRONTEND_URL = "https://lolisitheco.co.za";
-
-/* ================= SOCKET (optional) ================= */
-
-let io;
-const setSocket = (socketIo) => {
-  io = socketIo;
-};
-
-/* ================= PLANS ================= */
 
 const SUB_DAYS = {
   hustler: 30,
   business: 30,
 };
 
-/* ================= CREATE CHECKOUT ================= */
+/* ================= CHECKOUT ================= */
 
 const createCheckout = async (req, res) => {
   try {
@@ -54,11 +46,12 @@ const createCheckout = async (req, res) => {
       if (plan === "hustler") amount = 19900;
       else if (plan === "business") amount = 39900;
       else return res.status(400).json({ error: "Invalid plan" });
-    } else if (type === "verify_seller") {
-      amount = 10000;
-    } else if (type === "feature") {
-      amount = 1000;
-    } else {
+    }
+
+    if (type === "verify_seller") amount = 10000;
+    if (type === "feature") amount = 1000;
+
+    if (!amount) {
       return res.status(400).json({ error: "Invalid payment type" });
     }
 
@@ -88,12 +81,12 @@ const createCheckout = async (req, res) => {
     return res.json({ url: response.data.redirectUrl });
 
   } catch (err) {
-    console.error("❌ CHECKOUT ERROR:", err.response?.data || err.message);
+    console.error("❌ CHECKOUT ERROR:", err.message);
     return res.status(500).json({ error: "Payment failed" });
   }
 };
 
-/* ================= VERIFY WEBHOOK ================= */
+/* ================= WEBHOOK SECURITY ================= */
 
 const verifyWebhook = (req) => {
   if (!YOCO_WEBHOOK_SECRET) return;
@@ -132,38 +125,44 @@ const handleWebhook = async (req, res) => {
 
     const event = JSON.parse(req.body.toString());
 
-    const eventId =
-      event.id || event.payload?.id || `evt_${Date.now()}`;
+    const eventId = event.id || event.payload?.id;
 
-    /* prevent duplicate processing */
+    if (!eventId) {
+      return res.sendStatus(200);
+    }
+
+    /* ================= IDEMPOTENCY (PREVENT DOUBLE PAYMENT) ================= */
     const eventRef = db.collection("webhooks").doc(eventId);
-    if ((await eventRef.get()).exists) return res.sendStatus(200);
+    const exists = await eventRef.get();
+
+    if (exists.exists) {
+      return res.sendStatus(200);
+    }
 
     await eventRef.set({
-      createdAt: new Date(),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
     if (event.type !== "payment.succeeded") {
       return res.sendStatus(200);
     }
 
-    const metadata =
-      event.payload?.metadata || event.data?.metadata;
+    const metadata = event.payload?.metadata;
 
-    if (!metadata) return res.sendStatus(200);
+    if (!metadata?.userId || !metadata?.type) {
+      return res.sendStatus(200);
+    }
 
     const { userId, plan, type, listingId } = metadata;
 
-    const amount = event.payload?.amount || 0;
-
-    /* ================= SAVE PAYMENT HISTORY ================= */
+    /* ================= SAVE PAYMENT ================= */
 
     await db.collection("payments").doc(eventId).set({
       userId,
-      amount,
       type,
       plan: plan || null,
-      createdAt: new Date(),
+      listingId: listingId || null,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
     const userRef = db.collection("users").doc(userId);
@@ -178,17 +177,10 @@ const handleWebhook = async (req, res) => {
           subscriptionExpires: getExpiryDate(plan),
           canPost: true,
           isPremium: plan === "business",
-          lastPaymentAt: new Date(),
+          lastPaymentAt: admin.firestore.FieldValue.serverTimestamp(),
         },
         { merge: true }
       );
-
-      if (io) {
-        io.to(userId).emit("notification", {
-          type: "subscription",
-          message: "🚀 Subscription activated!",
-        });
-      }
     }
 
     /* ================= VERIFY SELLER ================= */
@@ -198,13 +190,6 @@ const handleWebhook = async (req, res) => {
         { verified: true },
         { merge: true }
       );
-
-      if (io) {
-        io.to(userId).emit("notification", {
-          type: "verified",
-          message: "✔ You are now verified!",
-        });
-      }
     }
 
     /* ================= FEATURE LISTING ================= */
@@ -213,7 +198,7 @@ const handleWebhook = async (req, res) => {
       await db.collection("products").doc(listingId).set(
         {
           featured: true,
-          featuredAt: new Date(),
+          featuredAt: admin.firestore.FieldValue.serverTimestamp(),
         },
         { merge: true }
       );
@@ -250,35 +235,28 @@ const checkUserStatus = async (req, res) => {
   }
 };
 
-/* ================= ADMIN STATS ================= */
-
-/* ================= ADMIN STATS ================= */
+/* ================= ADMIN STATS (SAFE ONLY) ================= */
 
 const getAdminStats = async (req, res) => {
   try {
-    const paymentsSnap = await db.collection("payments").get();
+    const snap = await db.collection("payments").get();
 
     let totalRevenue = 0;
     let totalPayments = 0;
     let subscriptions = 0;
     let features = 0;
 
-    paymentsSnap.forEach((doc) => {
+    snap.forEach((doc) => {
       const data = doc.data();
 
       totalRevenue += data.amount || 0;
       totalPayments++;
 
-      if (data.type === "subscription") {
-        subscriptions++;
-      }
-
-      if (data.type === "feature") {
-        features++;
-      }
+      if (data.type === "subscription") subscriptions++;
+      if (data.type === "feature") features++;
     });
 
-    return res.status(200).json({
+    return res.json({
       totalRevenue: totalRevenue / 100,
       totalPayments,
       subscriptions,
@@ -286,23 +264,17 @@ const getAdminStats = async (req, res) => {
     });
 
   } catch (err) {
-
-    console.error(
-      "❌ ADMIN STATS ERROR:",
-      err
-    );
-
     return res.status(500).json({
       error: "Failed to load admin stats",
-      details: err.message,
     });
   }
 };
+
+/* ================= EXPORTS ================= */
 
 module.exports = {
   createCheckout,
   handleWebhook,
   checkUserStatus,
   getAdminStats,
-  setSocket,
 };
