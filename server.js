@@ -20,7 +20,7 @@ if (!admin.apps.length) {
           /\\n/g,
           "\n"
         )
-        : underfined,
+        : undefined,
     }),
   });
 }
