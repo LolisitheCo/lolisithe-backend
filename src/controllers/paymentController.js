@@ -14,368 +14,261 @@ if (!admin.apps.length) {
 
 const db = admin.firestore();
 
+/* ================= ENV ================= */
+
 const YOCO_SECRET_KEY = process.env.YOCO_SECRET_KEY;
-const YOCO_WEBHOOK_SECRET =
-  process.env.YOCO_WEBHOOK_SECRET;
+const YOCO_WEBHOOK_SECRET = process.env.YOCO_WEBHOOK_SECRET;
+const FRONTEND_URL = "https://lolisitheco.co.za";
 
-const FRONTEND_URL =
-  "https://lolisitheco.co.za";
+/* ================= SOCKET (optional) ================= */
 
-/* ===================================== */
-/* SUBSCRIPTION DAYS */
-/* ===================================== */
+let io;
+const setSocket = (socketIo) => {
+  io = socketIo;
+};
+
+/* ================= PLANS ================= */
 
 const SUB_DAYS = {
   hustler: 30,
   business: 30,
 };
 
-/* ===================================== */
-/* CREATE CHECKOUT */
-/* ===================================== */
+/* ================= CREATE CHECKOUT ================= */
 
 const createCheckout = async (req, res) => {
   try {
-
-    console.log("REQ BODY:", req.body);
-
-    const {
-      email,
-      plan,
-      userId,
-      type,
-      listingId,
-    } = req.body;
+    const { email, plan, userId, type, listingId } = req.body;
 
     if (!email || !userId || !type) {
-      return res.status(400).json({
-        error: "Missing fields",
-      });
+      return res.status(400).json({ error: "Missing fields" });
     }
 
     let amount = 0;
-    let name = "";
-
-    /* ================= SUBSCRIPTIONS ================= */
 
     if (type === "subscription") {
-
-      if (plan === "hustler") {
-        amount = 19900;
-        name = "Hustler Plan";
-      }
-
-      else if (plan === "business") {
-        amount = 39900;
-        name = "Business Plan";
-      }
-
-      else {
-        return res.status(400).json({
-          error: "Invalid plan",
-        });
-      }
-    }
-
-    /* ================= VERIFIED ================= */
-
-    else if (type === "verify_seller") {
+      if (plan === "hustler") amount = 19900;
+      else if (plan === "business") amount = 39900;
+      else return res.status(400).json({ error: "Invalid plan" });
+    } else if (type === "verify_seller") {
       amount = 10000;
-      name = "Verified Seller";
-    }
-
-    /* ================= FEATURED ================= */
-
-    else if (type === "feature") {
+    } else if (type === "feature") {
       amount = 1000;
-      name = "Featured Listing";
+    } else {
+      return res.status(400).json({ error: "Invalid payment type" });
     }
-
-    /* ================= INVALID ================= */
-
-    else {
-      return res.status(400).json({
-        error: "Invalid payment",
-      });
-    }
-
-    /* ===================================== */
-    /* YOCO CHECKOUT */
-    /* ===================================== */
 
     const response = await axios.post(
-  "https://payments.yoco.com/api/checkouts/sessions",
-  {
-    amount,
-    currency: "ZAR",
-
-    successUrl: `${FRONTEND_URL}/payment-success`,
-
-    cancelUrl: `${FRONTEND_URL}/subscribe`,
-
-    metadata: {
-      userId,
-      email,
-      plan: plan || null,
-      type,
-      listingId: listingId || null,
-    },
-  },
-  {
-    headers: {
-      Authorization: `Bearer ${YOCO_SECRET_KEY}`,
-      "Content-Type": "application/json",
-    },
-  }
-);
-
-    console.log(
-      "✅ YOCO RESPONSE:",
-      response.data
+      "https://payments.yoco.com/api/checkouts",
+      {
+        amount,
+        currency: "ZAR",
+        successUrl: `${FRONTEND_URL}/payment-success`,
+        cancelUrl: `${FRONTEND_URL}/subscribe`,
+        metadata: {
+          userId,
+          email,
+          plan,
+          type,
+          listingId: listingId || null,
+        },
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${YOCO_SECRET_KEY}`,
+          "Content-Type": "application/json",
+        },
+      }
     );
 
-    return res.json({
-      url:
-        response.data.redirectUrl,
-    });
+    return res.json({ url: response.data.redirectUrl });
 
   } catch (err) {
-
-    console.error(
-      "❌ YOCO ERROR:",
-      err.response?.data || err.message
-    );
-
-    return res.status(500).json({
-      error:
-        err.response?.data ||
-        "Payment failed",
-    });
+    console.error("❌ CHECKOUT ERROR:", err.response?.data || err.message);
+    return res.status(500).json({ error: "Payment failed" });
   }
 };
 
-/* ===================================== */
-/* VERIFY WEBHOOK */
-/* ===================================== */
+/* ================= VERIFY WEBHOOK ================= */
 
 const verifyWebhook = (req) => {
+  if (!YOCO_WEBHOOK_SECRET) return;
 
-  const signature =
-    req.headers["webhook-signature"];
+  const signature = req.headers["webhook-signature"];
+  if (!signature) throw new Error("Missing signature");
+
+  const payload = Buffer.isBuffer(req.body)
+    ? req.body
+    : Buffer.from(req.body);
 
   const expected = crypto
-    .createHmac(
-      "sha256",
-      YOCO_WEBHOOK_SECRET
-    )
-    .update(req.body)
+    .createHmac("sha256", YOCO_WEBHOOK_SECRET)
+    .update(payload)
     .digest("hex");
 
   if (signature !== expected) {
-    throw new Error(
-      "Invalid webhook signature"
-    );
+    throw new Error("Invalid webhook signature");
   }
 };
 
-/* ===================================== */
-/* GET EXPIRY DATE */
-/* ===================================== */
+/* ================= EXPIRY ================= */
 
 const getExpiryDate = (plan) => {
-
-  const days =
-    SUB_DAYS[plan] || 30;
-
+  const days = SUB_DAYS[plan] || 30;
   const d = new Date();
-
-  d.setDate(
-    d.getDate() + days
-  );
-
+  d.setDate(d.getDate() + days);
   return d;
 };
 
-/* ===================================== */
-/* HANDLE WEBHOOK */
-/* ===================================== */
+/* ================= WEBHOOK ================= */
 
-const handleWebhook = async (
-  req,
-  res
-) => {
-
+const handleWebhook = async (req, res) => {
   try {
-
     verifyWebhook(req);
 
-    const event = JSON.parse(
-      req.body.toString()
-    );
+    const event = JSON.parse(req.body.toString());
 
-    console.log(
-      "🔥 WEBHOOK:",
-      event
-    );
+    const eventId =
+      event.id || event.payload?.id || `evt_${Date.now()}`;
 
-    const eventRef =
-      db.collection("webhooks")
-        .doc(event.id);
-
-    const exists =
-      await eventRef.get();
-
-    if (exists.exists) {
-      return res.sendStatus(200);
-    }
+    /* prevent duplicate processing */
+    const eventRef = db.collection("webhooks").doc(eventId);
+    if ((await eventRef.get()).exists) return res.sendStatus(200);
 
     await eventRef.set({
       createdAt: new Date(),
     });
 
-    if (
-      event.type !==
-      "payment.succeeded"
-    ) {
+    if (event.type !== "payment.succeeded") {
       return res.sendStatus(200);
     }
 
     const metadata =
-      event.payload?.metadata ||
-      event.data?.metadata;
+      event.payload?.metadata || event.data?.metadata;
 
-    if (!metadata) {
+    if (!metadata) return res.sendStatus(200);
 
-      console.log(
-        "⚠️ No metadata"
-      );
+    const { userId, plan, type, listingId } = metadata;
 
-      return res.sendStatus(200);
-    }
+    const amount = event.payload?.amount || 0;
 
-    const {
+    /* ================= SAVE PAYMENT HISTORY ================= */
+
+    await db.collection("payments").doc(eventId).set({
       userId,
-      plan,
+      amount,
       type,
-      listingId,
-    } = metadata;
+      plan: plan || null,
+      createdAt: new Date(),
+    });
 
-    const userRef =
-      db.collection("users")
-        .doc(userId);
+    const userRef = db.collection("users").doc(userId);
 
     /* ================= SUBSCRIPTION ================= */
 
     if (type === "subscription") {
-
       await userRef.set(
         {
           plan,
-
           subscriptionActive: true,
-
-          subscriptionExpires:
-            getExpiryDate(plan),
+          subscriptionExpires: getExpiryDate(plan),
+          canPost: true,
+          isPremium: plan === "business",
+          lastPaymentAt: new Date(),
         },
         { merge: true }
       );
+
+      if (io) {
+        io.to(userId).emit("notification", {
+          type: "subscription",
+          message: "🚀 Subscription activated!",
+        });
+      }
     }
 
-    /* ================= VERIFIED ================= */
+    /* ================= VERIFY SELLER ================= */
 
     if (type === "verify_seller") {
-
       await userRef.set(
+        { verified: true },
+        { merge: true }
+      );
+
+      if (io) {
+        io.to(userId).emit("notification", {
+          type: "verified",
+          message: "✔ You are now verified!",
+        });
+      }
+    }
+
+    /* ================= FEATURE LISTING ================= */
+
+    if (type === "feature" && listingId) {
+      await db.collection("products").doc(listingId).set(
         {
-          verified: true,
+          featured: true,
+          featuredAt: new Date(),
         },
         { merge: true }
       );
-    }
-
-    /* ================= FEATURED ================= */
-
-    if (
-      type === "feature" &&
-      listingId
-    ) {
-
-      await db
-        .collection("products")
-        .doc(listingId)
-        .set(
-          {
-            featured: true,
-            featuredAt: new Date(),
-          },
-          { merge: true }
-        );
     }
 
     return res.sendStatus(200);
 
   } catch (err) {
-
-    console.error(
-      "❌ WEBHOOK ERROR:",
-      err.message
-    );
-
+    console.error("❌ WEBHOOK ERROR:", err.message);
     return res.sendStatus(400);
   }
 };
 
-/* ===================================== */
-/* CHECK USER STATUS */
-/* ===================================== */
+/* ================= USER STATUS ================= */
 
-const checkUserStatus = async (
-  req,
-  res
-) => {
-
+const checkUserStatus = async (req, res) => {
   try {
-
-    const { userId } =
-      req.query;
+    const { userId } = req.query;
 
     if (!userId) {
-
-      return res.status(400).json({
-        error: "Missing userId",
-      });
+      return res.status(400).json({ error: "Missing userId" });
     }
 
-    const userDoc =
-      await db
-        .collection("users")
-        .doc(userId)
-        .get();
+    const doc = await db.collection("users").doc(userId).get();
 
-    if (!userDoc.exists) {
-
-      return res.status(404).json({
-        error: "User not found",
-      });
+    if (!doc.exists) {
+      return res.status(404).json({ error: "User not found" });
     }
 
-    return res.json(
-      userDoc.data()
-    );
+    return res.json(doc.data());
 
   } catch (err) {
-
-    console.error(err);
-
-    return res.status(500).json({
-      error:
-        "Failed to fetch status",
-    });
+    return res.status(500).json({ error: "Failed to fetch status" });
   }
+};
+
+/* ================= ADMIN STATS ================= */
+
+const getAdminStats = async (req, res) => {
+  const snap = await db.collection("payments").get();
+
+  let total = 0;
+  let count = 0;
+
+  snap.forEach((doc) => {
+    total += doc.data().amount || 0;
+    count++;
+  });
+
+  return res.json({
+    totalRevenue: total / 100,
+    totalPayments: count,
+  });
 };
 
 module.exports = {
   createCheckout,
   handleWebhook,
   checkUserStatus,
+  getAdminStats,
+  setSocket,
 };
