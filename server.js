@@ -68,7 +68,6 @@ app.use(
 
 /* ================= HANDLE PREFLIGHT ================= */
 
-app.options("*", cors());
 
 /* ================= WEBHOOK RAW BODY ================= */
 
