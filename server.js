@@ -20,6 +20,8 @@ if (!admin.apps.length) {
   });
 }
 
+const db = admin.firestore();
+
 /* ================= CONTROLLERS ================= */
 
 const payments = require("./src/controllers/paymentController");
