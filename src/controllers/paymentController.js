@@ -2,8 +2,6 @@ const axios = require("axios");
 const admin = require("firebase-admin");
 const crypto = require("crypto");
 
-const admin = require("firebase-admin");
-
 if (!admin.apps.length) {
   const privateKey = process.env.FIREBASE_PRIVATE_KEY
     .replace(/\\n/g, "\n")
