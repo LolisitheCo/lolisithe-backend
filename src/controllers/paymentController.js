@@ -248,37 +248,37 @@ const checkUserStatus = async (req, res) => {
 
 /* ================= ADMIN STATS ================= */
 
+/* ================= ADMIN STATS ================= */
+
 const getAdminStats = async (req, res) => {
   try {
+    const paymentsSnap = await db.collection("payments").get();
 
-    const snap = await db
-      .collection("payments")
-      .get();
+    let totalRevenue = 0;
+    let totalPayments = 0;
+    let subscriptions = 0;
+    let features = 0;
 
-    let total = 0;
-    let count = 0;
-
-    snap.forEach((doc) => {
-
+    paymentsSnap.forEach((doc) => {
       const data = doc.data();
 
-      const amount =
-        typeof data.amount === "number"
-          ? data.amount
-          : 0;
+      totalRevenue += data.amount || 0;
+      totalPayments++;
 
-      total += amount;
+      if (data.type === "subscription") {
+        subscriptions++;
+      }
 
-      count++;
+      if (data.type === "feature") {
+        features++;
+      }
     });
 
-    return res.json({
-      success: true,
-
-      totalRevenue:
-        Number((total / 100).toFixed(2)),
-
-      totalPayments: count,
+    return res.status(200).json({
+      totalRevenue: totalRevenue / 100,
+      totalPayments,
+      subscriptions,
+      features,
     });
 
   } catch (err) {
@@ -290,6 +290,7 @@ const getAdminStats = async (req, res) => {
 
     return res.status(500).json({
       error: "Failed to load admin stats",
+      details: err.message,
     });
   }
 };
