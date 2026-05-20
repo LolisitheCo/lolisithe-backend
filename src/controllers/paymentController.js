@@ -34,34 +34,64 @@ const SUB_DAYS = {
 
 const createCheckout = async (req, res) => {
   try {
-    const { email, plan, userId, type, listingId } = req.body;
+    console.log("🔥 CREATE CHECKOUT BODY:", req.body);
+
+    const {
+      email,
+      plan,
+      userId,
+      type,
+      listingId,
+    } = req.body;
 
     if (!email || !userId || !type) {
-      return res.status(400).json({ error: "Missing fields" });
+      return res.status(400).json({
+        error: "Missing required fields",
+      });
     }
 
     let amount = 0;
 
     if (type === "subscription") {
-      if (plan === "hustler") amount = 19900;
-      else if (plan === "business") amount = 39900;
-      else return res.status(400).json({ error: "Invalid plan" });
+      if (plan === "hustler") {
+        amount = 19900;
+      } else if (plan === "business") {
+        amount = 39900;
+      } else {
+        return res.status(400).json({
+          error: "Invalid subscription plan",
+        });
+      }
     }
 
-    if (type === "verify_seller") amount = 10000;
-    if (type === "feature") amount = 1000;
-
-    if (!amount) {
-      return res.status(400).json({ error: "Invalid payment type" });
+    else if (type === "verify_seller") {
+      amount = 10000;
     }
+
+    else if (type === "feature") {
+      amount = 1000;
+    }
+
+    else {
+      return res.status(400).json({
+        error: "Invalid payment type",
+      });
+    }
+
+    console.log("🔥 YOCO SECRET EXISTS:", !!YOCO_SECRET_KEY);
 
     const response = await axios.post(
       "https://payments.yoco.com/api/checkouts",
       {
         amount,
         currency: "ZAR",
-        successUrl: `${FRONTEND_URL}/payment-success`,
-        cancelUrl: `${FRONTEND_URL}/subscribe`,
+
+        successUrl:
+          `${FRONTEND_URL}/payment-success`,
+
+        cancelUrl:
+          `${FRONTEND_URL}/subscribe`,
+
         metadata: {
           userId,
           email,
@@ -78,11 +108,27 @@ const createCheckout = async (req, res) => {
       }
     );
 
-    return res.json({ url: response.data.redirectUrl });
+    console.log("✅ YOCO RESPONSE:", response.data);
+
+    return res.status(200).json({
+      url: response.data.redirectUrl,
+    });
 
   } catch (err) {
-    console.error("❌ CHECKOUT ERROR:", err.message);
-    return res.status(500).json({ error: "Payment failed" });
+
+    console.error(
+      "❌ CREATE CHECKOUT ERROR:"
+    );
+
+    console.error(
+      err.response?.data || err.message
+    );
+
+    return res.status(500).json({
+      error: "Checkout failed",
+      details:
+        err.response?.data || err.message,
+    });
   }
 };
 
