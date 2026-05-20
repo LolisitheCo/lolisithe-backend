@@ -249,20 +249,49 @@ const checkUserStatus = async (req, res) => {
 /* ================= ADMIN STATS ================= */
 
 const getAdminStats = async (req, res) => {
-  const snap = await db.collection("payments").get();
+  try {
 
-  let total = 0;
-  let count = 0;
+    const snap = await db
+      .collection("payments")
+      .get();
 
-  snap.forEach((doc) => {
-    total += doc.data().amount || 0;
-    count++;
-  });
+    let total = 0;
+    let count = 0;
 
-  return res.json({
-    totalRevenue: total / 100,
-    totalPayments: count,
-  });
+    snap.forEach((doc) => {
+
+      const data = doc.data();
+
+      const amount =
+        typeof data.amount === "number"
+          ? data.amount
+          : 0;
+
+      total += amount;
+
+      count++;
+    });
+
+    return res.json({
+      success: true,
+
+      totalRevenue:
+        Number((total / 100).toFixed(2)),
+
+      totalPayments: count,
+    });
+
+  } catch (err) {
+
+    console.error(
+      "❌ ADMIN STATS ERROR:",
+      err
+    );
+
+    return res.status(500).json({
+      error: "Failed to load admin stats",
+    });
+  }
 };
 
 module.exports = {
