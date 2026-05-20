@@ -110,28 +110,92 @@ app.get(
 
 /* ================= ADMIN SECURITY ================= */
 
+/* ================= ADMIN SECURITY ================= */
+
 const adminEmails = [
-  "sivuyilematras@gmail.com",
+  "sivuyilematras@gmail.com"
 ];
 
-const checkAdmin = (req, res, next) => {
-  const email = req.headers["x-user-email"];
+const checkAdmin = async (req, res, next) => {
+  try {
+    const email = req.headers["x-user-email"];
 
-  if (!email || !adminEmails.includes(email)) {
-    return res.status(403).json({
-      error: "Unauthorized admin access",
+    console.log("📩 Incoming admin email:", email);
+
+    if (!email) {
+      return res.status(401).json({
+        error: "No admin email provided",
+      });
+    }
+
+    const cleanEmail = email.toLowerCase().trim();
+
+    const allowedEmails = adminEmails.map((e) =>
+      e.toLowerCase().trim()
+    );
+
+    console.log("✅ Allowed emails:", allowedEmails);
+
+    if (!allowedEmails.includes(cleanEmail)) {
+      return res.status(403).json({
+        error: "Unauthorized admin access",
+      });
+    }
+
+    next();
+  } catch (err) {
+    console.error("❌ ADMIN CHECK ERROR:", err);
+
+    return res.status(500).json({
+      error: "Admin middleware failed",
     });
   }
-
-  next();
 };
 
+/* ================= ADMIN ROUTES ================= */
 /* ================= ADMIN ROUTES ================= */
 
 app.get(
   "/api/admin/stats",
   checkAdmin,
-  payments.getAdminStats
+  async (req, res) => {
+    try {
+      const snap = await db.collection("payments").get();
+
+      let totalRevenue = 0;
+      let totalPayments = 0;
+      let subscriptions = 0;
+      let features = 0;
+
+      snap.forEach((doc) => {
+        const data = doc.data();
+
+        totalRevenue += data.amount || 0;
+        totalPayments++;
+
+        if (data.type === "subscription") {
+          subscriptions++;
+        }
+
+        if (data.type === "feature") {
+          features++;
+        }
+      });
+
+      return res.json({
+        totalRevenue: totalRevenue / 100,
+        totalPayments,
+        subscriptions,
+        features,
+      });
+    } catch (err) {
+      console.error("❌ ADMIN STATS ERROR:", err);
+
+      return res.status(500).json({
+        error: err.message,
+      });
+    }
+  }
 );
 
 /* ================= SOCKET SERVER ================= */
