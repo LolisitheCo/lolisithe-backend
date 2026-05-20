@@ -1,257 +1,488 @@
-const express = require("express");
-const http = require("http");
-const { Server } = require("socket.io");
-const cors = require("cors");
-require("dotenv").config();
-
-/* ================= FIREBASE ADMIN ================= */
-
+const axios = require("axios");
 const admin = require("firebase-admin");
+const crypto = require("crypto");
+
+/* ===================================== */
+/* FIREBASE ADMIN */
+/* ===================================== */
 
 if (!admin.apps.length) {
   admin.initializeApp({
     credential: admin.credential.cert({
-      projectId:
-        process.env.FIREBASE_PROJECT_ID,
+      projectId: process.env.FIREBASE_PROJECT_ID,
 
       clientEmail:
         process.env.FIREBASE_CLIENT_EMAIL,
 
-    privateKey:
-  process.env.FIREBASE_PRIVATE_KEY.replace(
-    /\\n/g,
-    "\n"
-  ),
+      privateKey:
+        process.env.FIREBASE_PRIVATE_KEY.replace(
+          /\\n/g,
+          "\n"
+        ),
     }),
   });
 }
 
-
 const db = admin.firestore();
 
-/* ================= CONTROLLERS ================= */
+/* ===================================== */
+/* ENV VARIABLES */
+/* ===================================== */
 
-const payments = require(
-  "./src/controllers/paymentController"
-);
+const YOCO_SECRET_KEY =
+  process.env.YOCO_SECRET_KEY;
 
-/* ================= EXPRESS ================= */
+const YOCO_WEBHOOK_SECRET =
+  process.env.YOCO_WEBHOOK_SECRET;
 
-const app = express();
+const FRONTEND_URL =
+  "https://lolisitheco.co.za";
 
-/* ================= WEBHOOK RAW BODY ================= */
+/* ===================================== */
+/* SUBSCRIPTION DAYS */
+/* ===================================== */
 
-/*
-  Yoco webhook requires RAW body
-  BEFORE express.json()
-*/
+const SUB_DAYS = {
+  hustler: 30,
+  business: 30,
+};
 
-app.use(
-  "/api/payments/webhook",
-  express.raw({
-    type: "application/json",
-  })
-);
+/* ===================================== */
+/* GET EXPIRY DATE */
+/* ===================================== */
 
-/* ================= BODY PARSER ================= */
+const getExpiryDate = (plan) => {
 
-app.use(
-  express.json({
-    verify: (req, res, buf) => {
-      req.rawBody = buf;
-    },
-  })
-);
+  const days =
+    SUB_DAYS[plan] || 30;
 
-/* ================= CORS ================= */
+  const expiry = new Date();
 
-app.use(
-  cors({
-    origin: [
-
-      "https://lolisitheco.co.za",
-
-      "https://www.lolisitheco.co.za",
-    ],
-
-    methods: [
-      "GET",
-      "POST",
-      "PUT",
-      "DELETE",
-      "OPTIONS",
-    ],
-
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-    ],
-
-    credentials: true,
-  })
-);
-
-/* ================= SERVER ================= */
-
-const server = http.createServer(app);
-
-/* ================= SOCKET.IO ================= */
-
-const io = new Server(server, {
-  cors: {
-    origin: [
-
-      "https://lolisitheco.co.za",
-
-      "https://www.lolisitheco.co.za",
-    ],
-
-    methods: ["GET", "POST"],
-
-    credentials: true,
-  },
-});
-
-/* ================= SOCKET EVENTS ================= */
-
-io.on("connection", (socket) => {
-
-  console.log(
-    "🟢 Connected:",
-    socket.id
+  expiry.setDate(
+    expiry.getDate() + days
   );
 
-  /* ================= JOIN ROOM ================= */
+  return expiry;
+};
 
-  socket.on(
-    "join_user_room",
-    ({ userId, email }) => {
+/* ===================================== */
+/* CREATE YOCO CHECKOUT */
+/* ===================================== */
 
-      socket.join(userId);
+const createCheckout = async (
+  req,
+  res
+) => {
 
-      console.log(
-        `👤 ${email} joined room ${userId}`
-      );
-    }
-  );
-
-  /* ================= SEND MESSAGE ================= */
-
-  socket.on(
-    "send_message",
-
-    async ({
-      userId,
-      message,
-      sender,
-    }) => {
-
-      try {
-
-        if (!userId || !message) {
-          return;
-        }
-
-        const msgData = {
-          text: message,
-
-          sender,
-
-          createdAt: new Date(),
-        };
-
-        /* SAVE TO FIRESTORE */
-
-        await db
-          .collection("conversations")
-          .doc(userId)
-          .collection("messages")
-          .add(msgData);
-
-        /* EMIT TO ROOM */
-
-        io.to(userId).emit(
-          "receive_message",
-          {
-            message,
-            sender,
-          }
-        );
-
-      } catch (err) {
-
-        console.error(
-          "❌ Message error:",
-          err
-        );
-      }
-    }
-  );
-
-  /* ================= DISCONNECT ================= */
-
-  socket.on("disconnect", () => {
+  try {
 
     console.log(
-      "🔴 Disconnected:",
-      socket.id
+      "📦 PAYMENT REQUEST:",
+      req.body
     );
-  });
-});
 
-/* ================= ROUTES ================= */
+    const {
+      email,
+      plan,
+      userId,
+      type,
+      listingId,
+    } = req.body;
 
-/* ROOT */
+    /* ===================================== */
+    /* VALIDATION */
+    /* ===================================== */
 
-app.get("/", (req, res) => {
+    if (
+      !email ||
+      !userId ||
+      !type
+    ) {
 
-  res.send("🚀 Backend running");
-});
+      return res.status(400).json({
+        error: "Missing fields",
+      });
+    }
 
-/* TEST */
+    let amount = 0;
 
-app.get("/api/test", (req, res) => {
+    let name = "";
 
-  res.json({
-    success: true,
-    message: "API working",
-  });
-});
+    /* ===================================== */
+    /* SUBSCRIPTIONS */
+    /* ===================================== */
 
-/* ================= PAYMENTS ================= */
+    if (type === "subscription") {
 
-/* CREATE CHECKOUT */
+      if (plan === "hustler") {
 
-app.post(
-  "/api/payments/create-checkout",
+        amount = 19900;
 
-  payments.createCheckout
-);
+        name = "Hustler Plan";
+      }
 
-/* WEBHOOK */
+      else if (
+        plan === "business"
+      ) {
 
-app.post(
-  "/api/payments/webhook",
+        amount = 39900;
 
-  payments.handleWebhook
-);
+        name = "Business Plan";
+      }
 
-/* USER STATUS */
+      else {
 
-app.get(
-  "/api/payments/status",
+        return res.status(400).json({
+          error: "Invalid plan",
+        });
+      }
+    }
 
-  payments.checkUserStatus
-);
+    /* ===================================== */
+    /* VERIFIED SELLER */
+    /* ===================================== */
 
-/* ================= START ================= */
+    else if (
+      type === "verify_seller"
+    ) {
 
-const PORT =
-  process.env.PORT || 5000;
+      amount = 10000;
 
-server.listen(PORT, () => {
+      name = "Verified Seller";
+    }
 
-  console.log(
-    `🚀 Server running on port ${PORT}`
-  );
-});
+    /* ===================================== */
+    /* FEATURED LISTING */
+    /* ===================================== */
+
+    else if (type === "feature") {
+
+      amount = 1000;
+
+      name = "Featured Listing";
+    }
+
+    /* ===================================== */
+    /* INVALID TYPE */
+    /* ===================================== */
+
+    else {
+
+      return res.status(400).json({
+        error:
+          "Invalid payment type",
+      });
+    }
+
+    /* ===================================== */
+    /* CREATE YOCO CHECKOUT */
+    /* ===================================== */
+
+    const response = await axios.post(
+      "https://payments.yoco.com/api/checkouts",
+
+      {
+        amount,
+
+        currency: "ZAR",
+
+        successUrl:
+          `${FRONTEND_URL}/payment-success`,
+
+        cancelUrl:
+          `${FRONTEND_URL}/subscribe`,
+
+        metadata: {
+          userId,
+
+          email,
+
+          plan:
+            plan || null,
+
+          type,
+
+          listingId:
+            listingId || null,
+        },
+      },
+
+      {
+        headers: {
+          Authorization:
+            `Bearer ${YOCO_SECRET_KEY}`,
+
+          "Content-Type":
+            "application/json",
+        },
+      }
+    );
+
+    console.log(
+      "✅ YOCO RESPONSE:",
+      response.data
+    );
+
+    return res.json({
+      url:
+        response.data.redirectUrl,
+    });
+
+  } catch (err) {
+
+    console.error(
+      "❌ YOCO ERROR:",
+      err.response?.data ||
+      err.message
+    );
+
+    return res.status(500).json({
+      error:
+        err.response?.data ||
+        err.message,
+    });
+  }
+};
+
+/* ===================================== */
+/* VERIFY WEBHOOK */
+/* ===================================== */
+
+const verifyWebhook = (req) => {
+
+  const signature =
+    req.headers["webhook-signature"];
+
+  const expected = crypto
+    .createHmac(
+      "sha256",
+      YOCO_WEBHOOK_SECRET
+    )
+    .update(req.body)
+    .digest("hex");
+
+  if (signature !== expected) {
+
+    throw new Error(
+      "Invalid webhook signature"
+    );
+  }
+};
+
+/* ===================================== */
+/* HANDLE WEBHOOK */
+/* ===================================== */
+
+const handleWebhook = async (
+  req,
+  res
+) => {
+
+  try {
+
+    verifyWebhook(req);
+
+    const event = JSON.parse(
+      req.body.toString()
+    );
+
+    console.log(
+      "🔥 YOCO WEBHOOK:",
+      event
+    );
+
+    /* ===================================== */
+    /* PREVENT DUPLICATES */
+    /* ===================================== */
+
+    const eventRef =
+      db.collection("webhooks")
+        .doc(event.id);
+
+    const existing =
+      await eventRef.get();
+
+    if (existing.exists) {
+
+      return res.sendStatus(200);
+    }
+
+    await eventRef.set({
+      createdAt: new Date(),
+    });
+
+    /* ===================================== */
+    /* ONLY HANDLE SUCCESS */
+    /* ===================================== */
+
+    if (
+      event.type !==
+      "payment.succeeded"
+    ) {
+
+      return res.sendStatus(200);
+    }
+
+    /* ===================================== */
+    /* GET METADATA */
+    /* ===================================== */
+
+    const metadata =
+      event.payload?.metadata ||
+      event.data?.metadata;
+
+    if (!metadata) {
+
+      console.log(
+        "⚠️ No metadata found"
+      );
+
+      return res.sendStatus(200);
+    }
+
+    const {
+      userId,
+      plan,
+      type,
+      listingId,
+    } = metadata;
+
+    const userRef =
+      db.collection("users")
+        .doc(userId);
+
+    /* ===================================== */
+    /* SUBSCRIPTIONS */
+    /* ===================================== */
+
+    if (type === "subscription") {
+
+      await userRef.set(
+        {
+          plan,
+
+          subscriptionActive: true,
+
+          subscriptionExpires:
+            getExpiryDate(plan),
+        },
+
+        { merge: true }
+      );
+    }
+
+    /* ===================================== */
+    /* VERIFIED SELLER */
+    /* ===================================== */
+
+    if (
+      type === "verify_seller"
+    ) {
+
+      await userRef.set(
+        {
+          verified: true,
+        },
+
+        { merge: true }
+      );
+    }
+
+    /* ===================================== */
+    /* FEATURED LISTING */
+    /* ===================================== */
+
+    if (
+      type === "feature" &&
+      listingId
+    ) {
+
+      await db
+        .collection("products")
+        .doc(listingId)
+        .set(
+          {
+            featured: true,
+
+            featuredAt:
+              new Date(),
+          },
+
+          { merge: true }
+        );
+    }
+
+    return res.sendStatus(200);
+
+  } catch (err) {
+
+    console.error(
+      "❌ WEBHOOK ERROR:",
+      err.message
+    );
+
+    return res.sendStatus(400);
+  }
+};
+
+/* ===================================== */
+/* CHECK USER STATUS */
+/* ===================================== */
+
+const checkUserStatus = async (
+  req,
+  res
+) => {
+
+  try {
+
+    const { userId } =
+      req.query;
+
+    if (!userId) {
+
+      return res.status(400).json({
+        error: "Missing userId",
+      });
+    }
+
+    const userDoc =
+      await db
+        .collection("users")
+        .doc(userId)
+        .get();
+
+    if (!userDoc.exists) {
+
+      return res.status(404).json({
+        error: "User not found",
+      });
+    }
+
+    return res.json(
+      userDoc.data()
+    );
+
+  } catch (err) {
+
+    console.error(
+      "❌ STATUS ERROR:",
+      err
+    );
+
+    return res.status(500).json({
+      error:
+        "Failed to fetch user status",
+    });
+  }
+};
+
+/* ===================================== */
+/* EXPORTS */
+/* ===================================== */
+
+module.exports = {
+  createCheckout,
+  handleWebhook,
+  checkUserStatus,
+};

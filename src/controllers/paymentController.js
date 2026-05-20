@@ -104,49 +104,30 @@ const createCheckout = async (req, res) => {
     /* ===================================== */
 
     const response = await axios.post(
-      "https://payments.yoco.com/api/checkouts",
+  "https://payments.yoco.com/api/checkouts/sessions",
+  {
+    amount,
+    currency: "ZAR",
 
-      {
-        amount,
-        currency: "ZAR",
+    successUrl: `${FRONTEND_URL}/payment-success`,
 
-        successUrl:
-          `${FRONTEND_URL}/payment-success`,
+    cancelUrl: `${FRONTEND_URL}/subscribe`,
 
-        cancelUrl:
-          `${FRONTEND_URL}/subscribe`,
-
-        metadata: {
-          userId,
-          email,
-          plan: plan || null,
-          type,
-          listingId: listingId || null,
-        },
-
-        lineItems: [
-          {
-            displayName: name,
-
-            quantity: 1,
-
-            pricingDetails: {
-              price: amount,
-            },
-          },
-        ],
-      },
-
-      {
-        headers: {
-          Authorization:
-            `Bearer ${YOCO_SECRET_KEY}`,
-
-          "Content-Type":
-            "application/json",
-        },
-      }
-    );
+    metadata: {
+      userId,
+      email,
+      plan: plan || null,
+      type,
+      listingId: listingId || null,
+    },
+  },
+  {
+    headers: {
+      Authorization: `Bearer ${YOCO_SECRET_KEY}`,
+      "Content-Type": "application/json",
+    },
+  }
+);
 
     console.log(
       "✅ YOCO RESPONSE:",
@@ -155,8 +136,7 @@ const createCheckout = async (req, res) => {
 
     return res.json({
       url:
-        response.data.redirectUrl ||
-        response.data.url,
+        response.data.redirectUrl,
     });
 
   } catch (err) {
