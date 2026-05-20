@@ -23,7 +23,6 @@ if (!admin.apps.length) {
 const db = admin.firestore();
 
 /* ================= CONTROLLERS ================= */
-
 const payments = require("./src/controllers/paymentController");
 
 /* ================= APP ================= */
@@ -51,35 +50,12 @@ app.use(
     },
 
     credentials: true,
-
-    methods: [
-      "GET",
-      "POST",
-      "PUT",
-      "DELETE",
-      "OPTIONS",
-    ],
-
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-      "x-user-email",
-    ],
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 
-/* ================= HANDLE PREFLIGHT ================= */
-
-
-/* ================= WEBHOOK RAW BODY ================= */
-
-app.post(
-  "/api/payments/webhook",
-  express.raw({ type: "application/json" }),
-  payments.handleWebhook
-);
-
-/* ================= JSON ================= */
+/* ================= BODY ================= */
 
 app.use(express.json());
 
@@ -110,101 +86,105 @@ app.get(
   payments.checkUserStatus
 );
 
-/* ================= ADMIN SECURITY ================= */
+app.post(
+  "/api/payments/webhook",
+  express.raw({ type: "application/json" }),
+  payments.handleWebhook
+);
 
-/* ================= ADMIN SECURITY ================= */
+/* =======================================================
+   🔐 FIREBASE AUTH + ROLE SYSTEM (REAL SECURITY)
+======================================================= */
 
-const adminEmails = [
-  "sivuyilematras@gmail.com"
-];
+const getUserFromToken = async (req) => {
+  const authHeader = req.headers.authorization;
 
-const checkAdmin = async (req, res, next) => {
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    throw new Error("No token");
+  }
+
+  const token = authHeader.split("Bearer ")[1];
+
+  const decoded = await admin.auth().verifyIdToken(token);
+
+  const userDoc = await db.collection("users").doc(decoded.uid).get();
+
+  if (!userDoc.exists) {
+    throw new Error("User not found in DB");
+  }
+
+  return {
+    uid: decoded.uid,
+    email: decoded.email,
+    ...userDoc.data(),
+  };
+};
+
+/* ================= ADMIN MIDDLEWARE ================= */
+
+const requireAdmin = async (req, res, next) => {
   try {
-    const email = req.headers["x-user-email"];
+    const user = await getUserFromToken(req);
 
-    console.log("📩 Incoming admin email:", email);
-
-    if (!email) {
-      return res.status(401).json({
-        error: "No admin email provided",
-      });
+    if (!user.role) {
+      return res.status(403).json({ error: "No role assigned" });
     }
 
-    const cleanEmail = email.toLowerCase().trim();
-
-    const allowedEmails = adminEmails.map((e) =>
-      e.toLowerCase().trim()
-    );
-
-    console.log("✅ Allowed emails:", allowedEmails);
-
-    if (!allowedEmails.includes(cleanEmail)) {
-      return res.status(403).json({
-        error: "Unauthorized admin access",
-      });
+    if (!["superAdmin", "moderator"].includes(user.role)) {
+      return res.status(403).json({ error: "Not authorized" });
     }
 
+    req.user = user;
     next();
   } catch (err) {
-    console.error("❌ ADMIN CHECK ERROR:", err);
+    console.error("❌ AUTH ERROR:", err.message);
 
-    return res.status(500).json({
-      error: "Admin middleware failed",
+    return res.status(401).json({
+      error: "Invalid or missing token",
     });
   }
 };
 
-/* ================= ADMIN ROUTES ================= */
-/* ================= ADMIN ROUTES ================= */
+/* ================= ADMIN ROUTE ================= */
 
-app.get(
-  "/api/admin/stats",
-  checkAdmin,
-  async (req, res) => {
-    try {
-      const snap = await db.collection("payments").get();
+app.get("/api/admin/stats", requireAdmin, async (req, res) => {
+  try {
+    const snap = await db.collection("payments").get();
 
-      let totalRevenue = 0;
-      let totalPayments = 0;
-      let subscriptions = 0;
-      let features = 0;
+    let totalRevenue = 0;
+    let totalPayments = 0;
+    let subscriptions = 0;
+    let features = 0;
 
-      snap.forEach((doc) => {
-        const data = doc.data();
+    snap.forEach((doc) => {
+      const data = doc.data();
 
-        totalRevenue += data.amount || 0;
-        totalPayments++;
+      totalRevenue += data.amount || 0;
+      totalPayments++;
 
-        if (data.type === "subscription") {
-          subscriptions++;
-        }
+      if (data.type === "subscription") subscriptions++;
+      if (data.type === "feature") features++;
+    });
 
-        if (data.type === "feature") {
-          features++;
-        }
-      });
+    res.json({
+      totalRevenue: totalRevenue / 100,
+      totalPayments,
+      subscriptions,
+      features,
+      adminRole: req.user.role,
+    });
+  } catch (err) {
+    console.error("❌ ADMIN STATS ERROR:", err);
 
-      return res.json({
-        totalRevenue: totalRevenue / 100,
-        totalPayments,
-        subscriptions,
-        features,
-      });
-    } catch (err) {
-      console.error("❌ ADMIN STATS ERROR:", err);
-
-      return res.status(500).json({
-        error: err.message,
-      });
-    }
+    res.status(500).json({
+      error: "Failed to load admin stats",
+    });
   }
-);
-
-/* ================= SOCKET SERVER ================= */
-
-const server = http.createServer(app);
+});
 
 /* ================= SOCKET.IO ================= */
+
+const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
@@ -214,48 +194,36 @@ const io = new Server(server, {
   },
 });
 
-/* ================= SOCKET EVENTS ================= */
-
 io.on("connection", (socket) => {
   console.log("🟢 Connected:", socket.id);
 
   socket.on("join_user_room", ({ userId }) => {
     if (!userId) return;
-
     socket.join(userId);
   });
 
-  socket.on(
-    "send_message",
-    async ({ userId, message, sender }) => {
-      try {
-        if (!userId || !message) return;
+  socket.on("send_message", async ({ userId, message, sender }) => {
+    try {
+      if (!userId || !message) return;
 
-        await db
-          .collection("conversations")
-          .doc(userId)
-          .collection("messages")
-          .add({
-            text: message,
-            sender,
-            createdAt: new Date(),
-          });
+      await db
+        .collection("conversations")
+        .doc(userId)
+        .collection("messages")
+        .add({
+          text: message,
+          sender,
+          createdAt: new Date(),
+        });
 
-        io.to(userId).emit(
-          "receive_message",
-          {
-            message,
-            sender,
-          }
-        );
-      } catch (err) {
-        console.error(
-          "❌ Socket error:",
-          err.message
-        );
-      }
+      io.to(userId).emit("receive_message", {
+        message,
+        sender,
+      });
+    } catch (err) {
+      console.error("❌ Socket error:", err.message);
     }
-  );
+  });
 
   socket.on("disconnect", () => {
     console.log("🔴 Disconnected:", socket.id);
