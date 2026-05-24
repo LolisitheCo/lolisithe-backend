@@ -51,54 +51,49 @@ const createCheckout = async (req, res) => {
     }
 
     let amount = 0;
+    let description = "";
+
+    /* ================= SUBSCRIPTION ================= */
 
     if (type === "subscription") {
+
       if (plan === "hustler") {
         amount = 19900;
-      } else if (plan === "business") {
+        description = "Hustler Subscription";
+      }
+
+      else if (plan === "business") {
         amount = 39900;
-      } else {
+        description = "Business Subscription";
+      }
+
+      else {
         return res.status(400).json({
           error: "Invalid subscription plan",
         });
       }
     }
 
-    else if (type === "verify_seller") {
-      amount = 10000;
-    }
+   
 
-    else if (type === "feature") {
-      amount = 1000;
-    }
+    console.log(
+      "🔥 YOCO SECRET EXISTS:",
+      !!YOCO_SECRET_KEY
+    );
 
-    else {
-      return res.status(400).json({
-        error: "Invalid payment type",
-      });
-    }
-
-    console.log("🔥 YOCO SECRET EXISTS:", !!YOCO_SECRET_KEY);
+    /* ================= YOCO PAYMENT LINK ================= */
 
     const response = await axios.post(
-      "https://payments.yoco.com/api/checkouts",
+      "https://api.yoco.com/v1/payment_links/",
       {
-        amount,
-        currency: "ZAR",
-
-        successUrl:
-          `${FRONTEND_URL}/payment-success`,
-
-        cancelUrl:
-          `${FRONTEND_URL}/subscribe`,
-
-        metadata: {
-          userId,
-          email,
-          plan,
-          type,
-          listingId: listingId || null,
+        amount: {
+          amount,
+          currency: "ZAR",
         },
+
+        customer_reference: email,
+
+        customer_description: description,
       },
       {
         headers: {
@@ -108,10 +103,32 @@ const createCheckout = async (req, res) => {
       }
     );
 
-    console.log("✅ YOCO RESPONSE:", response.data);
+    console.log(
+      "✅ YOCO RESPONSE:",
+      response.data
+    );
+
+    /* ================= SAVE PENDING PAYMENT ================= */
+
+    await db.collection("pendingPayments").add({
+      userId,
+      email,
+      plan: plan || null,
+      type,
+      listingId: listingId || null,
+
+      paymentLinkId: response.data.id,
+
+      status: "pending",
+
+      createdAt:
+        admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    /* ================= RETURN PAYMENT URL ================= */
 
     return res.status(200).json({
-      url: response.data.redirectUrl,
+      url: response.data.url,
     });
 
   } catch (err) {
