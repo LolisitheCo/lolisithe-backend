@@ -4,13 +4,20 @@ const admin = require("firebase-admin");
 /* ================= FIREBASE INIT ================= */
 
 if (!admin.apps.length) {
+
   const privateKey =
-    process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n").replace(/^"|"$/g, "");
+    process.env.FIREBASE_PRIVATE_KEY
+      ?.replace(/\\n/g, "\n")
+      .replace(/^"|"$/g, "");
 
   admin.initializeApp({
     credential: admin.credential.cert({
-      projectId: process.env.FIREBASE_PROJECT_ID,
-      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+      projectId:
+        process.env.FIREBASE_PROJECT_ID,
+
+      clientEmail:
+        process.env.FIREBASE_CLIENT_EMAIL,
+
       privateKey,
     }),
   });
@@ -20,21 +27,25 @@ const db = admin.firestore();
 
 /* ================= CONFIG ================= */
 
-const YOCO_SECRET_KEY = process.env.YOCO_SECRET_KEY;
+const YOCO_SECRET_KEY =
+  process.env.YOCO_SECRET_KEY;
 
-/* ================= NETFLIX-STYLE SUBSCRIPTIONS ================= */
+/* ================= PLANS ================= */
 
 const PLANS = {
+
   free: {
     listings: 2,
     featured: false,
     priority: false,
   },
+
   hustler: {
     listings: 15,
     featured: true,
     priority: true,
   },
+
   business: {
     listings: Infinity,
     featured: true,
@@ -53,217 +64,529 @@ const GRACE_DAYS = 3;
 /* ================= HELPERS ================= */
 
 const getExpiryDate = (plan) => {
+
   const d = new Date();
-  d.setDate(d.getDate() + (SUB_DAYS[plan] || 30));
+
+  d.setDate(
+    d.getDate() +
+      (SUB_DAYS[plan] || 30)
+  );
+
   return d;
 };
 
 const getGraceDate = (expiry) => {
+
   const d = new Date(expiry);
-  d.setDate(d.getDate() + GRACE_DAYS);
+
+  d.setDate(
+    d.getDate() + GRACE_DAYS
+  );
+
   return d;
 };
 
-const isValidPlan = (plan) => ["hustler", "business"].includes(plan);
+const isValidPlan = (plan) =>
+  ["hustler", "business"]
+    .includes(plan);
 
-/* ================= CREATE CHECKOUT ================= */
+/* =========================================================
+   CREATE CHECKOUT
+========================================================= */
 
-const createCheckout = async (req, res) => {
+const createCheckout = async (
+  req,
+  res
+) => {
+
   try {
-    const { email, plan, userId, type, listingId } = req.body;
 
-    if (!email || !userId || !type) {
-      return res.status(400).json({ error: "Missing fields" });
+    const {
+      email,
+      plan,
+      userId,
+      type,
+      listingId,
+    } = req.body;
+
+    if (
+      !email ||
+      !userId ||
+      !type
+    ) {
+
+      return res.status(400).json({
+        error: "Missing fields",
+      });
     }
 
     let amount = 0;
-    let description = "Marketplace Payment";
 
-    /* ================= PRICING ================= */
+    let description =
+      "Marketplace Payment";
+
+    /* ================= SUBSCRIPTIONS ================= */
 
     if (type === "subscription") {
+
       if (!isValidPlan(plan)) {
-        return res.status(400).json({ error: "Invalid plan" });
+
+        return res.status(400).json({
+          error: "Invalid plan",
+        });
       }
 
       if (plan === "hustler") {
-        amount = 19900;
-        description = "Hustler Plan (30 days)";
+
+        amount = 15000;
+
+        description =
+          "Hustler Plan";
       }
 
       if (plan === "business") {
-        amount = 39900;
-        description = "Business Plan (30 days)";
+
+        amount = 30000;
+
+        description =
+          "Business Plan";
       }
     }
+
+    /* ================= VERIFIED ================= */
 
     if (type === "verify_seller") {
+
       amount = 9900;
-      description = "Verified Seller Badge";
+
+      description =
+        "Verified Seller Badge";
     }
+
+    /* ================= FEATURE ================= */
 
     if (type === "feature") {
+
       amount = 1000;
-      description = "Featured Listing";
+
+      description =
+        "Featured Listing";
     }
 
-    /* ================= YOCO REQUEST ================= */
+    /* ================= YOCO ================= */
 
-    const response = await axios.post(
-      "https://api.yoco.com/v1/payment_links/",
-      {
-        amount: { amount, currency: "ZAR" },
-        customer_reference: email,
-        customer_description: description,
-        metadata: {
-          userId,
-          email,
-          type,
-          plan: plan || null,
-          listingId: listingId || null,
+    const response =
+      await axios.post(
+
+        "https://api.yoco.com/v1/payment_links/",
+
+        {
+          amount: {
+            amount,
+            currency: "ZAR",
+          },
+
+          customer_reference:
+            email,
+
+          customer_description:
+            description,
         },
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${YOCO_SECRET_KEY}`,
-          "Content-Type": "application/json",
-        },
-      }
+
+        {
+          headers: {
+            Authorization:
+              `Bearer ${YOCO_SECRET_KEY}`,
+
+            "Content-Type":
+              "application/json",
+          },
+        }
+      );
+
+    console.log(
+      "✅ YOCO PAYMENT LINK:",
+      response.data
     );
 
-    /* ================= STORE PENDING PAYMENT ================= */
+    /* ================= SAVE PENDING PAYMENT ================= */
 
-    await db.collection("pendingPayments").add({
-      userId,
-      email,
-      type,
-      plan: plan || null,
-      listingId: listingId || null,
-      amount,
-      status: "pending",
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    await db
+      .collection(
+        "pendingPayments"
+      )
+      .add({
+
+        paymentLinkId:
+          response.data.id,
+
+        userId,
+
+        email,
+
+        type,
+
+        plan:
+          plan || null,
+
+        listingId:
+          listingId || null,
+
+        amount,
+
+        status: "pending",
+
+        createdAt:
+          admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+    /* ================= RETURN URL ================= */
+
+    return res.json({
+      url: response.data.url,
     });
 
-    return res.json({ url: response.data.url });
   } catch (err) {
-    console.error("CREATE CHECKOUT ERROR:", err.message);
-    return res.status(500).json({ error: "Checkout failed" });
+
+    console.error(
+      "❌ CREATE CHECKOUT ERROR:",
+      err.response?.data ||
+        err.message
+    );
+
+    return res.status(500).json({
+      error: "Checkout failed",
+    });
   }
 };
 
-/* ================= WEBHOOK ================= */
+/* =========================================================
+   WEBHOOK
+========================================================= */
 
-const handleWebhook = async (req, res) => {
+const handleWebhook = async (
+  req,
+  res
+) => {
+
   try {
+
     let event =
       Buffer.isBuffer(req.body)
-        ? JSON.parse(req.body.toString("utf8"))
+        ? JSON.parse(
+            req.body.toString("utf8")
+          )
         : req.body;
 
-    const eventId = event.id || event.payload?.id;
-    if (!eventId) return res.sendStatus(200);
+    console.log(
+      "🔥 WEBHOOK:",
+      JSON.stringify(
+        event,
+        null,
+        2
+      )
+    );
 
-    /* ================= DEDUP ================= */
+    const eventId =
+      event.id ||
+      event.payload?.id;
 
-    const webhookRef = db.collection("webhooks").doc(eventId);
-    if ((await webhookRef.get()).exists) return res.sendStatus(200);
+    if (!eventId) {
 
-    await webhookRef.set({
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-
-    /* ================= ONLY SUCCESS EVENTS ================= */
-
-    if (event.type !== "payment.succeeded") {
       return res.sendStatus(200);
     }
 
-    const metadata = event.payload?.metadata;
-    if (!metadata?.userId) return res.sendStatus(200);
+    /* ================= PREVENT DUPLICATES ================= */
 
-    const { userId, type, plan, listingId } = metadata;
-    const userRef = db.collection("users").doc(userId);
+    const webhookRef =
+      db.collection("webhooks")
+        .doc(eventId);
 
-    /* ================= SUBSCRIPTION UPGRADE ================= */
+    const exists =
+      await webhookRef.get();
+
+    if (exists.exists) {
+
+      return res.sendStatus(200);
+    }
+
+    await webhookRef.set({
+
+      createdAt:
+        admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    /* ================= ONLY SUCCESS PAYMENTS ================= */
+
+    if (
+      event.type !==
+      "payment.succeeded"
+    ) {
+
+      return res.sendStatus(200);
+    }
+
+    /* ================= PAYMENT LINK ID ================= */
+
+    const paymentLinkId =
+
+      event.payload
+        ?.paymentLinkId ||
+
+      event.payload
+        ?.payment_link_id ||
+
+      event.payload?.id;
+
+    if (!paymentLinkId) {
+
+      console.log(
+        "❌ Missing payment link id"
+      );
+
+      return res.sendStatus(200);
+    }
+
+    /* ================= FIND PENDING PAYMENT ================= */
+
+    const pendingSnap =
+      await db
+        .collection(
+          "pendingPayments"
+        )
+        .where(
+          "paymentLinkId",
+          "==",
+          paymentLinkId
+        )
+        .limit(1)
+        .get();
+
+    if (pendingSnap.empty) {
+
+      console.log(
+        "❌ Pending payment not found"
+      );
+
+      return res.sendStatus(200);
+    }
+
+    const pendingDoc =
+      pendingSnap.docs[0];
+
+    const paymentData =
+      pendingDoc.data();
+
+    const {
+      userId,
+      type,
+      plan,
+      listingId,
+      email,
+      amount,
+    } = paymentData;
+
+    const userRef =
+      db.collection("users")
+        .doc(userId);
+
+    /* ================= SAVE PAYMENT ================= */
+
+    await db
+      .collection("payments")
+      .doc(eventId)
+      .set({
+
+        userId,
+
+        email,
+
+        type,
+
+        plan:
+          plan || null,
+
+        listingId:
+          listingId || null,
+
+        amount,
+
+        createdAt:
+          admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+    /* ================= SUBSCRIPTIONS ================= */
 
     if (type === "subscription") {
-      const expiry = getExpiryDate(plan);
+
+      const expiry =
+        getExpiryDate(plan);
 
       await userRef.set(
+
         {
+
           plan,
+
           subscriptionActive: true,
-          subscriptionExpires: expiry,
-          graceUntil: getGraceDate(expiry),
+
+          subscriptionExpires:
+            expiry,
+
+          graceUntil:
+            getGraceDate(expiry),
 
           canPost: true,
-          isPremium: plan === "business",
 
-          listingsLimit: PLANS[plan].listings,
-          featuredAccess: PLANS[plan].featured,
-          priorityAccess: PLANS[plan].priority,
+          isPremium:
+            plan === "business",
 
-          lastPaymentAt: admin.firestore.FieldValue.serverTimestamp(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          listingsLimit:
+            PLANS[plan].listings,
+
+          featuredAccess:
+            PLANS[plan].featured,
+
+          priorityAccess:
+            PLANS[plan].priority,
+
+          lastPaymentAt:
+            admin.firestore.FieldValue.serverTimestamp(),
+
+          updatedAt:
+            admin.firestore.FieldValue.serverTimestamp(),
         },
+
         { merge: true }
+      );
+
+      console.log(
+        "✅ SUBSCRIPTION UPDATED"
       );
     }
 
     /* ================= VERIFIED SELLER ================= */
 
-    if (type === "verify_seller") {
+    if (
+      type === "verify_seller"
+    ) {
+
       await userRef.set(
+
         {
+
           verified: true,
-          verifiedAt: admin.firestore.FieldValue.serverTimestamp(),
-          verificationSource: "yoco",
+
+          verifiedAt:
+            admin.firestore.FieldValue.serverTimestamp(),
+
+          verificationSource:
+            "yoco",
         },
+
         { merge: true }
+      );
+
+      console.log(
+        "✅ USER VERIFIED"
       );
     }
 
     /* ================= FEATURE LISTING ================= */
 
-    if (type === "feature" && listingId) {
-      await db.collection("products").doc(listingId).set(
-        {
-          featured: true,
-          featuredAt: admin.firestore.FieldValue.serverTimestamp(),
-        },
-        { merge: true }
+    if (
+      type === "feature" &&
+      listingId
+    ) {
+
+      await db
+        .collection("products")
+        .doc(listingId)
+        .set(
+
+          {
+
+            featured: true,
+
+            featuredAt:
+              admin.firestore.FieldValue.serverTimestamp(),
+          },
+
+          { merge: true }
+        );
+
+      console.log(
+        "✅ LISTING FEATURED"
       );
     }
 
+    /* ================= REMOVE PENDING PAYMENT ================= */
+
+    await pendingDoc.ref.delete();
+
     return res.sendStatus(200);
+
   } catch (err) {
-    console.error("WEBHOOK ERROR:", err.message);
+
+    console.error(
+      "❌ WEBHOOK ERROR:",
+      err
+    );
+
     return res.sendStatus(400);
   }
 };
 
-/* ================= USER STATUS API (REAL-TIME SUPPORT) ================= */
+/* =========================================================
+   USER STATUS
+========================================================= */
 
-const checkUserStatus = async (req, res) => {
+const checkUserStatus = async (
+  req,
+  res
+) => {
+
   try {
-    const { userId } = req.query;
+
+    const { userId } =
+      req.query;
 
     if (!userId) {
-      return res.status(400).json({ error: "Missing userId" });
+
+      return res.status(400).json({
+        error:
+          "Missing userId",
+      });
     }
 
-    const doc = await db.collection("users").doc(userId).get();
+    const snap =
+      await db
+        .collection("users")
+        .doc(userId)
+        .get();
 
-    return res.json(doc.data() || {});
+    return res.json(
+      snap.data() || {}
+    );
+
   } catch (err) {
-    return res.status(500).json({ error: "Failed to fetch user" });
+
+    return res.status(500).json({
+      error:
+        "Failed to fetch user",
+    });
   }
 };
 
-/* ================= EXPORTS ================= */
+/* =========================================================
+   EXPORTS
+========================================================= */
 
 module.exports = {
+
   createCheckout,
+
   handleWebhook,
+
   checkUserStatus,
 };
