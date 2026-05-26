@@ -5,6 +5,13 @@ require("dotenv").config();
 
 const payments = require("./src/controllers/paymentController");
 
+const runExpiryCheck = require("./jobs/subscriptionCron");
+
+// every 1 hour (safe Netflix-style sync)
+setInterval(() => {
+  runExpiryCheck();
+}, 60 * 60 * 1000);
+
 const app = express();
 const server = http.createServer(app);
 
@@ -24,6 +31,8 @@ app.use(
     allowedHeaders: ["Content-Type"],
   })
 );
+
+
 
 /* ================= BODY ================= */
 

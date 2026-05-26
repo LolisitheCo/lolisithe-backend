@@ -26,13 +26,8 @@ const db = admin.firestore();
 const YOCO_SECRET_KEY = process.env.YOCO_SECRET_KEY;
 const YOCO_WEBHOOK_SECRET = process.env.YOCO_WEBHOOK_SECRET;
 
-const PLAN_LIMITS = {
-  free: { listings: 2 },
-  hustler: { listings: 15 },
-  business: { listings: -1 },
-};
+/* ================= SUBSCRIPTION RULES (30 DAYS) ================= */
 
-/* 🔥 KEEP ONLY ONE SUB_DAYS */
 const SUB_DAYS = {
   hustler: 30,
   business: 30,
@@ -44,7 +39,7 @@ const GRACE_DAYS = 3;
 
 const getExpiryDate = (plan) => {
   const d = new Date();
-  d.setDate(d.getDate() + SUB_DAYS[plan]);
+  d.setDate(d.getDate() + (SUB_DAYS[plan] || 30));
   return d;
 };
 
@@ -54,7 +49,9 @@ const getGraceDate = (expiry) => {
   return d;
 };
 
-/* ================= CREATE CHECKOUT ================= */
+/* =========================================================
+   CREATE CHECKOUT
+========================================================= */
 
 const createCheckout = async (req, res) => {
   try {
@@ -68,16 +65,25 @@ const createCheckout = async (req, res) => {
     let description = "Marketplace Payment";
 
     if (type === "subscription") {
-      if (plan === "hustler") amount = 19900;
-      else if (plan === "business") amount = 39900;
+      if (plan === "hustler") {
+        amount = 19900;
+        description = "Hustler Plan";
+      } else if (plan === "business") {
+        amount = 39900;
+        description = "Business Plan";
+      } else {
+        return res.status(400).json({ error: "Invalid plan" });
+      }
     }
 
     if (type === "verify_seller") {
       amount = 10000;
+      description = "Verified Seller Badge";
     }
 
     if (type === "feature") {
       amount = 1000;
+      description = "Featured Listing";
     }
 
     const response = await axios.post(
@@ -115,19 +121,26 @@ const createCheckout = async (req, res) => {
     });
 
     return res.json({ url: response.data.url });
+
   } catch (err) {
-    console.error(err.message);
+    console.error("CREATE CHECKOUT ERROR:", err.message);
     return res.status(500).json({ error: "Checkout failed" });
   }
 };
 
-/* ================= WEBHOOK ================= */
+/* =========================================================
+   WEBHOOK (FIXED - NO BUFFER ERRORS)
+========================================================= */
 
 const handleWebhook = async (req, res) => {
   try {
-    let event = Buffer.isBuffer(req.body)
-      ? JSON.parse(req.body.toString("utf8"))
-      : req.body;
+    let event;
+
+    if (Buffer.isBuffer(req.body)) {
+      event = JSON.parse(req.body.toString("utf8"));
+    } else {
+      event = req.body;
+    }
 
     const eventId = event.id || event.payload?.id;
     if (!eventId) return res.sendStatus(200);
@@ -139,12 +152,14 @@ const handleWebhook = async (req, res) => {
     if (event.type !== "payment.succeeded") return res.sendStatus(200);
 
     const metadata = event.payload?.metadata;
-    if (!metadata?.userId) return res.sendStatus(200);
+    if (!metadata?.userId || !metadata?.type) return res.sendStatus(200);
 
     const { userId, type, plan, listingId } = metadata;
+
     const userRef = db.collection("users").doc(userId);
 
-    /* SUBSCRIPTION */
+    /* ================= SUBSCRIPTION (30 DAYS FIXED) ================= */
+
     if (type === "subscription") {
       const expiry = getExpiryDate(plan);
 
@@ -156,23 +171,28 @@ const handleWebhook = async (req, res) => {
           graceUntil: getGraceDate(expiry),
           canPost: true,
           isPremium: plan === "business",
+          verified: true, // optional upgrade boost
+          lastPaymentAt: admin.firestore.FieldValue.serverTimestamp(),
         },
         { merge: true }
       );
     }
 
-    /* VERIFIED */
+    /* ================= VERIFIED BADGE ================= */
+
     if (type === "verify_seller") {
       await userRef.set(
         {
           verified: true,
           verifiedAt: admin.firestore.FieldValue.serverTimestamp(),
+          verificationSource: "yoco",
         },
         { merge: true }
       );
     }
 
-    /* FEATURE */
+    /* ================= FEATURE LISTING ================= */
+
     if (type === "feature" && listingId) {
       await db.collection("products").doc(listingId).set(
         {
@@ -184,15 +204,39 @@ const handleWebhook = async (req, res) => {
     }
 
     return res.sendStatus(200);
+
   } catch (err) {
     console.error("WEBHOOK ERROR:", err.message);
     return res.sendStatus(400);
   }
 };
 
-/* ================= EXPORTS ================= */
+/* =========================================================
+   USER STATUS (REAL-TIME BADGE SYNC)
+========================================================= */
+
+const checkUserStatus = async (req, res) => {
+  try {
+    const { userId } = req.query;
+
+    if (!userId) {
+      return res.status(400).json({ error: "Missing userId" });
+    }
+
+    const doc = await db.collection("users").doc(userId).get();
+
+    return res.json(doc.data() || {});
+  } catch (err) {
+    return res.status(500).json({ error: "Failed to fetch user" });
+  }
+};
+
+/* =========================================================
+   EXPORTS
+========================================================= */
 
 module.exports = {
   createCheckout,
   handleWebhook,
+  checkUserStatus,
 };
