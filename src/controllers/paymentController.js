@@ -29,9 +29,10 @@ const YOCO_WEBHOOK_SECRET = process.env.YOCO_WEBHOOK_SECRET;
 const PLAN_LIMITS = {
   free: { listings: 2 },
   hustler: { listings: 15 },
-  business: { listings: -1 }, // unlimited
+  business: { listings: -1 },
 };
 
+/* 🔥 KEEP ONLY ONE SUB_DAYS */
 const SUB_DAYS = {
   hustler: 30,
   business: 30,
@@ -39,14 +40,7 @@ const SUB_DAYS = {
 
 const GRACE_DAYS = 3;
 
-/* =========================================================
-   HELPERS (NETFLIX STYLE SUBSCRIPTION ENGINE)
-========================================================= */
-
-const SUB_DAYS = {
-  hustler: 30,
-  business: 30,
-};
+/* ================= HELPERS ================= */
 
 const getExpiryDate = (plan) => {
   const d = new Date();
@@ -60,9 +54,7 @@ const getGraceDate = (expiry) => {
   return d;
 };
 
-/* =========================================================
-   CREATE CHECKOUT
-========================================================= */
+/* ================= CREATE CHECKOUT ================= */
 
 const createCheckout = async (req, res) => {
   try {
@@ -76,23 +68,16 @@ const createCheckout = async (req, res) => {
     let description = "Marketplace Payment";
 
     if (type === "subscription") {
-      if (plan === "hustler") {
-        amount = 19900;
-        description = "Hustler Plan";
-      } else if (plan === "business") {
-        amount = 39900;
-        description = "Business Plan";
-      }
+      if (plan === "hustler") amount = 19900;
+      else if (plan === "business") amount = 39900;
     }
 
     if (type === "verify_seller") {
       amount = 10000;
-      description = "Verified Seller Badge";
     }
 
     if (type === "feature") {
       amount = 1000;
-      description = "Featured Listing";
     }
 
     const response = await axios.post(
@@ -102,7 +87,6 @@ const createCheckout = async (req, res) => {
         customer_reference: email,
         customer_description: description,
 
-        /* 🔥 CRITICAL FIX */
         metadata: {
           userId,
           email,
@@ -132,51 +116,35 @@ const createCheckout = async (req, res) => {
 
     return res.json({ url: response.data.url });
   } catch (err) {
-    return res.status(500).json({
-      error: "Checkout failed",
-      details: err.message,
-    });
+    console.error(err.message);
+    return res.status(500).json({ error: "Checkout failed" });
   }
 };
 
-/* =========================================================
-   WEBHOOK (FIXED + FULL ENGINE)
-========================================================= */
+/* ================= WEBHOOK ================= */
 
 const handleWebhook = async (req, res) => {
   try {
-    /* SAFE PARSING */
-    let event;
-    if (Buffer.isBuffer(req.body)) {
-      event = JSON.parse(req.body.toString("utf8"));
-    } else {
-      event = req.body;
-    }
-
-    console.log("🔥 WEBHOOK:", event.type);
+    let event = Buffer.isBuffer(req.body)
+      ? JSON.parse(req.body.toString("utf8"))
+      : req.body;
 
     const eventId = event.id || event.payload?.id;
     if (!eventId) return res.sendStatus(200);
 
-    /* DEDUP */
     const ref = db.collection("webhooks").doc(eventId);
     if ((await ref.get()).exists) return res.sendStatus(200);
     await ref.set({ createdAt: admin.firestore.FieldValue.serverTimestamp() });
 
-    /* ONLY SUCCESS */
     if (event.type !== "payment.succeeded") return res.sendStatus(200);
 
     const metadata = event.payload?.metadata;
     if (!metadata?.userId) return res.sendStatus(200);
 
     const { userId, type, plan, listingId } = metadata;
-
     const userRef = db.collection("users").doc(userId);
 
-    /* =====================================================
-       1. SUBSCRIPTION SYSTEM (NETFLIX STYLE)
-    ===================================================== */
-
+    /* SUBSCRIPTION */
     if (type === "subscription") {
       const expiry = getExpiryDate(plan);
 
@@ -188,16 +156,12 @@ const handleWebhook = async (req, res) => {
           graceUntil: getGraceDate(expiry),
           canPost: true,
           isPremium: plan === "business",
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         },
         { merge: true }
       );
     }
 
-    /* =====================================================
-       2. VERIFIED SELLER
-    ===================================================== */
-
+    /* VERIFIED */
     if (type === "verify_seller") {
       await userRef.set(
         {
@@ -208,10 +172,7 @@ const handleWebhook = async (req, res) => {
       );
     }
 
-    /* =====================================================
-       3. FEATURE LISTING (PLAN CHECK READY)
-    ===================================================== */
-
+    /* FEATURE */
     if (type === "feature" && listingId) {
       await db.collection("products").doc(listingId).set(
         {
@@ -229,94 +190,9 @@ const handleWebhook = async (req, res) => {
   }
 };
 
-/* =========================================================
-   🔥 BACKEND PROTECTION (PLAN CHECK MIDDLEWARE)
-========================================================= */
-
-const canPostListing = async (userId) => {
-  const user = await db.collection("users").doc(userId).get();
-  const data = user.data();
-
-  if (!data) return false;
-
-  const now = new Date();
-  const expiry = data.subscriptionExpires?.toDate?.();
-
-  const inGrace = data.graceUntil?.toDate?.() > now;
-
-  const active =
-    data.subscriptionActive &&
-    (expiry > now || inGrace);
-
-  if (data.plan === "business") return true;
-
-  if (data.plan === "hustler") return active;
-
-  return false;
-};
-
-/* =========================================================
-   FEATURE PLAN VALIDATION
-========================================================= */
-
-const canFeaturePost = async (userId) => {
-  const user = await db.collection("users").doc(userId).get();
-  const data = user.data();
-
-  return data?.plan === "hustler" || data?.plan === "business";
-};
-
-/* =========================================================
-   AUTO EXPIRE JOB (CALL VIA CRON DAILY)
-========================================================= */
-
-const expireUsers = async () => {
-  const snap = await db.collection("users").get();
-
-  const now = new Date();
-
-  snap.forEach(async (doc) => {
-    const u = doc.data();
-
-    const expiry = u.subscriptionExpires?.toDate?.();
-
-    if (expiry && expiry < now) {
-      await doc.ref.update({
-        subscriptionActive: false,
-        plan: "free",
-        downgradedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-
-      console.log("⬇ DOWNGRADED USER:", doc.id);
-    }
-  });
-};
-
-/* =========================================================
-   USER STATUS (REAL-TIME READY)
-========================================================= */
-
-const checkUserStatus = async (req, res) => {
-  const { userId } = req.query;
-
-  const doc = await db.collection("users").doc(userId).get();
-
-  return res.json(doc.data());
-};
-
-/* =========================================================
-   EXPORTS
-========================================================= */
+/* ================= EXPORTS ================= */
 
 module.exports = {
   createCheckout,
   handleWebhook,
-  checkUserStatus,
-
-  /* protection helpers */
-  canPostListing,
-  canFeaturePost,
-
-  /* cron job */
-  expireUsers,
 };
