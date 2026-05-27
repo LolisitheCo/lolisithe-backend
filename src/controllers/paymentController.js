@@ -264,84 +264,78 @@ const createCheckout = async (
    WEBHOOK
 ========================================================= */
 
-const handleWebhook = async (
-  req,
-  res
-) => {
-
+const handleWebhook = async (req, res) => {
   try {
-
-    let event =
-      Buffer.isBuffer(req.body)
-        ? JSON.parse(
-            req.body.toString("utf8")
-          )
-        : req.body;
+    const event = Buffer.isBuffer(req.body)
+      ? JSON.parse(req.body.toString("utf8"))
+      : req.body;
 
     console.log(
-      "🔥 WEBHOOK:",
-      JSON.stringify(
-        event,
-        null,
-        2
-      )
+      "🔥 WEBHOOK RECEIVED:",
+      JSON.stringify(event, null, 2)
     );
+
+    /* ================= EVENT ID ================= */
 
     const eventId =
       event.id ||
-      event.payload?.id;
-
-    if (!eventId) {
-
-      return res.sendStatus(200);
-    }
+      event.payload?.id ||
+      `evt_${Date.now()}`;
 
     /* ================= PREVENT DUPLICATES ================= */
 
     const webhookRef =
-      db.collection("webhooks")
-        .doc(eventId);
+      db.collection("webhooks").doc(eventId);
 
-    const exists =
+    const existingWebhook =
       await webhookRef.get();
 
-    if (exists.exists) {
+    if (existingWebhook.exists) {
+      console.log("⚠️ Duplicate webhook");
 
       return res.sendStatus(200);
     }
 
     await webhookRef.set({
-
       createdAt:
         admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    /* ================= ONLY SUCCESS PAYMENTS ================= */
+    /* ================= ONLY SUCCESS ================= */
 
     if (
-      event.type !==
-      "payment.succeeded"
+      event.type !== "payment.succeeded"
     ) {
+      console.log("⚠️ Ignored event:", event.type);
 
       return res.sendStatus(200);
     }
 
-    /* ================= PAYMENT LINK ID ================= */
+    /* ================= FIND PAYMENT LINK ID ================= */
 
     const paymentLinkId =
+      event.payload?.paymentLinkId ||
+      event.payload?.payment_link_id ||
 
-      event.payload
-        ?.paymentLinkId ||
+      event.payload?.paymentLink?.id ||
+      event.payload?.payment_link?.id ||
 
-      event.payload
-        ?.payment_link_id ||
+      event.payload?.payment?.paymentLinkId ||
+      event.payload?.payment?.payment_link_id ||
 
-      event.payload?.id;
+      event.payload?.payment?.paymentLink?.id ||
+      event.payload?.payment?.payment_link?.id ||
+
+      null;
+
+    console.log(
+      "🔥 PAYMENT LINK ID:",
+      paymentLinkId
+    );
 
     if (!paymentLinkId) {
-
       console.log(
-        "❌ Missing payment link id"
+        "❌ No payment link id found"
       );
 
       return res.sendStatus(200);
@@ -349,21 +343,17 @@ const handleWebhook = async (
 
     /* ================= FIND PENDING PAYMENT ================= */
 
-    const pendingSnap =
-      await db
-        .collection(
-          "pendingPayments"
-        )
-        .where(
-          "paymentLinkId",
-          "==",
-          paymentLinkId
-        )
-        .limit(1)
-        .get();
+    const pendingSnap = await db
+      .collection("pendingPayments")
+      .where(
+        "paymentLinkId",
+        "==",
+        paymentLinkId
+      )
+      .limit(1)
+      .get();
 
     if (pendingSnap.empty) {
-
       console.log(
         "❌ Pending payment not found"
       );
@@ -377,6 +367,11 @@ const handleWebhook = async (
     const paymentData =
       pendingDoc.data();
 
+    console.log(
+      "🔥 PAYMENT DATA:",
+      paymentData
+    );
+
     const {
       userId,
       type,
@@ -387,8 +382,7 @@ const handleWebhook = async (
     } = paymentData;
 
     const userRef =
-      db.collection("users")
-        .doc(userId);
+      db.collection("users").doc(userId);
 
     /* ================= SAVE PAYMENT ================= */
 
@@ -396,36 +390,28 @@ const handleWebhook = async (
       .collection("payments")
       .doc(eventId)
       .set({
-
         userId,
-
         email,
-
         type,
-
-        plan:
-          plan || null,
-
+        plan: plan || null,
         listingId:
           listingId || null,
-
         amount,
 
         createdAt:
           admin.firestore.FieldValue.serverTimestamp(),
       });
 
-    /* ================= SUBSCRIPTIONS ================= */
+    /* =====================================================
+       SUBSCRIPTIONS
+    ===================================================== */
 
     if (type === "subscription") {
-
       const expiry =
         getExpiryDate(plan);
 
       await userRef.set(
-
         {
-
           plan,
 
           subscriptionActive: true,
@@ -456,7 +442,6 @@ const handleWebhook = async (
           updatedAt:
             admin.firestore.FieldValue.serverTimestamp(),
         },
-
         { merge: true }
       );
 
@@ -465,16 +450,16 @@ const handleWebhook = async (
       );
     }
 
-    /* ================= VERIFIED SELLER ================= */
+    /* =====================================================
+       VERIFIED SELLER
+    ===================================================== */
 
     if (
-      type === "verify_seller"
+      type === "verify_seller" ||
+      type === "verification"
     ) {
-
       await userRef.set(
-
         {
-
           verified: true,
 
           verifiedAt:
@@ -482,36 +467,37 @@ const handleWebhook = async (
 
           verificationSource:
             "yoco",
-        },
 
+          updatedAt:
+            admin.firestore.FieldValue.serverTimestamp(),
+        },
         { merge: true }
       );
 
       console.log(
-        "✅ USER VERIFIED"
+        "✅ USER VERIFIED:",
+        userId
       );
     }
 
-    /* ================= FEATURE LISTING ================= */
+    /* =====================================================
+       FEATURED LISTING
+    ===================================================== */
 
     if (
       type === "feature" &&
       listingId
     ) {
-
       await db
         .collection("products")
         .doc(listingId)
         .set(
-
           {
-
             featured: true,
 
             featuredAt:
               admin.firestore.FieldValue.serverTimestamp(),
           },
-
           { merge: true }
         );
 
@@ -520,14 +506,17 @@ const handleWebhook = async (
       );
     }
 
-    /* ================= REMOVE PENDING PAYMENT ================= */
+    /* ================= DELETE PENDING PAYMENT ================= */
 
     await pendingDoc.ref.delete();
+
+    console.log(
+      "✅ PAYMENT COMPLETED SUCCESSFULLY"
+    );
 
     return res.sendStatus(200);
 
   } catch (err) {
-
     console.error(
       "❌ WEBHOOK ERROR:",
       err
@@ -579,6 +568,80 @@ const checkUserStatus = async (
 };
 
 /* =========================================================
+   GET SUBSCRIPTION
+========================================================= */
+
+const getSubscription = async (
+  req,
+  res
+) => {
+
+  try {
+
+    const { userId } =
+      req.query;
+
+    if (!userId) {
+
+      return res.status(400).json({
+        error: "Missing userId",
+      });
+    }
+
+    const snap =
+      await db
+        .collection("users")
+        .doc(userId)
+        .get();
+
+    if (!snap.exists) {
+
+      return res.status(404).json({
+        error: "User not found",
+      });
+    }
+
+    const data = snap.data();
+
+    return res.json({
+
+      plan:
+        data.plan || "free",
+
+      subscriptionActive:
+        data.subscriptionActive || false,
+
+      subscriptionExpires:
+        data.subscriptionExpires || null,
+
+      verified:
+        data.verified || false,
+
+      listingsLimit:
+        data.listingsLimit || 2,
+
+      featuredAccess:
+        data.featuredAccess || false,
+
+      priorityAccess:
+        data.priorityAccess || false,
+    });
+
+  } catch (err) {
+
+    console.error(
+      "GET SUBSCRIPTION ERROR:",
+      err
+    );
+
+    return res.status(500).json({
+      error:
+        "Failed to fetch subscription",
+    });
+  }
+};
+
+/* =========================================================
    EXPORTS
 ========================================================= */
 
@@ -589,4 +652,6 @@ module.exports = {
   handleWebhook,
 
   checkUserStatus,
+
+  getSubscription,
 };

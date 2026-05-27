@@ -1,24 +1,51 @@
 const express = require("express");
+
 const router = express.Router();
 
 const {
   createCheckout,
   handleWebhook,
+  checkUserStatus,
   getSubscription,
-  getUserStatus,
 } = require("../controllers/paymentController");
 
-// ✅ CREATE PAYMENT
-router.post("/create-checkout", createCheckout);
+/* =========================================
+   CREATE CHECKOUT
+========================================= */
 
-router.post("/webhook", handleWebhook);
+router.post(
+  "/create-checkout",
+  createCheckout
+);
 
+/* =========================================
+   YOCO WEBHOOK
+========================================= */
 
+router.post(
+  "/webhook",
+  express.raw({
+    type: "application/json",
+  }),
+  handleWebhook
+);
 
-// ✅ GET PLAN
-router.get("/subscription", getSubscription);
+/* =========================================
+   GET USER SUBSCRIPTION
+========================================= */
 
-// ✅ GET STATUS
-router.get("/status", getUserStatus);
+router.get(
+  "/subscription",
+  getSubscription
+);
+
+/* =========================================
+   GET USER STATUS
+========================================= */
+
+router.get(
+  "/status",
+  checkUserStatus
+);
 
 module.exports = router;
