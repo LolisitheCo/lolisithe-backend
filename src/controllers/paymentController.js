@@ -138,7 +138,7 @@ const createCheckout = async (
 
       if (plan === "hustler") {
 
-        amount = 15000;
+        amount = 19900;
 
         description =
           "Hustler Plan";
@@ -146,7 +146,7 @@ const createCheckout = async (
 
       if (plan === "business") {
 
-        amount = 30000;
+        amount = 39900;
 
         description =
           "Business Plan";
