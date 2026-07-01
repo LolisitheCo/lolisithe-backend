@@ -4,68 +4,64 @@ const cors = require("cors");
 require("dotenv").config();
 
 const payments = require("./src/controllers/paymentController");
-
 const runExpiryCheck = require("./jobs/subscriptionCron");
-
-// every 1 hour (safe Netflix-style sync)
-setInterval(() => {
-  runExpiryCheck();
-}, 60 * 60 * 1000);
 
 const app = express();
 const server = http.createServer(app);
 
 /* ================= CORS ================= */
 
-const allowedOrigins = [
-  "http://localhost:5173",
-  "https://lolisitheco.co.za",
-  "https://www.lolisitheco.co.za",
-];
-
 app.use(
   cors({
-    origin: allowedOrigins,
+    origin: [
+      "http://localhost:5173",
+      "https://lolisitheco.co.za",
+      "https://www.lolisitheco.co.za",
+    ],
     credentials: true,
     methods: ["GET", "POST"],
     allowedHeaders: ["Content-Type"],
   })
 );
 
+/* ================= WEBHOOK (RAW FIRST - CRITICAL) ================= */
 
-
-/* ================= BODY ================= */
-
-app.use(express.json());
-
-/* ================= HEALTH CHECK ================= */
-
-app.get("/", (req, res) => {
-  res.send("💳 Payment Backend Running");
-});
-
-/* ================= PAYMENTS ONLY ================= */
-
-/**
- * Create checkout session
- */
-app.post("/api/payments/create-checkout", payments.createCheckout);
-
-/**
- * Check payment/subscription status (Firebase will store user state)
- */
-app.get("/api/payments/status", payments.checkUserStatus);
-
-/**
- * Webhook (Paystack / Yoco / Flutterwave)
- */
 app.post(
   "/api/payments/webhook",
   express.raw({ type: "application/json" }),
   payments.handleWebhook
 );
 
-/* ================= START SERVER ================= */
+/* ================= SAFE JSON MIDDLEWARE ================= */
+
+app.use((req, res, next) => {
+  if (req.originalUrl === "/api/payments/webhook") return next();
+  express.json()(req, res, next);
+});
+
+/* ================= HEALTH ================= */
+
+app.get("/", (req, res) => {
+  res.send("💳 Payment Backend Running");
+});
+
+/* ================= ROUTES ================= */
+
+app.post("/api/payments/create-checkout", payments.createCheckout);
+
+app.get("/api/payments/status", payments.checkUserStatus);
+
+/* ================= SUBSCRIPTION CRON ================= */
+
+setInterval(async () => {
+  try {
+    await runExpiryCheck();
+  } catch (err) {
+    console.error("❌ Expiry job error:", err);
+  }
+}, 60 * 60 * 1000);
+
+/* ================= START ================= */
 
 const PORT = process.env.PORT || 5000;
 

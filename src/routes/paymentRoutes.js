@@ -1,5 +1,4 @@
 const express = require("express");
-
 const router = express.Router();
 
 const {
@@ -9,42 +8,33 @@ const {
   getSubscription,
 } = require("../controllers/paymentController");
 
-/* =========================================
-   CREATE CHECKOUT
-========================================= */
+const verifyToken = require("../middleware/verifyToken");
 
+/* ================= CREATE CHECKOUT ================= */
 router.post(
   "/create-checkout",
+  verifyToken,
   createCheckout
 );
 
-/* =========================================
-   YOCO WEBHOOK
-========================================= */
-
+/* ================= YOCO WEBHOOK (RAW BODY) ================= */
 router.post(
   "/webhook",
-  express.raw({
-    type: "application/json",
-  }),
+  express.raw({ type: "application/json" }),
   handleWebhook
 );
 
-/* =========================================
-   GET USER SUBSCRIPTION
-========================================= */
-
+/* ================= SUBSCRIPTION ================= */
 router.get(
   "/subscription",
+  verifyToken,
   getSubscription
 );
 
-/* =========================================
-   GET USER STATUS
-========================================= */
-
+/* ================= USER STATUS ================= */
 router.get(
   "/status",
+  verifyToken,
   checkUserStatus
 );
 
