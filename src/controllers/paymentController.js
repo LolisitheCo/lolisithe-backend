@@ -97,7 +97,7 @@ const createCheckout = async (req, res) => {
     }
 
     const response = await axios.post(
-      "https://payments.yoco.com/api/payment-links",
+      "https://payments.yoco.com/api/create-checkout",
       {
         amount,
         currency: "ZAR",
