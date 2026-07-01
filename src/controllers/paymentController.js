@@ -296,7 +296,6 @@ const handleWebhook = async (req, res) => {
     const existingWebhook =
       await webhookRef.get();
 
-      const webhookRef = db.collection("webhooks").doc(paymentLinkId);
 
     if (existingWebhook.exists) {
       console.log("⚠️ Duplicate webhook");
