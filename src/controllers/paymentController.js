@@ -181,8 +181,10 @@ const createCheckout = async (
         "https://api.yoco.com/v1/payment_links/",
 
         {
-          amount: amount,
+          amount:{
+            value: amount,
           currency: "ZAR",
+        },
           successUrl: "https://lolisitheco.co.za/success",
           cancelUrl: "https://lolisitheco.co.za/cancel",
            metadata: {
