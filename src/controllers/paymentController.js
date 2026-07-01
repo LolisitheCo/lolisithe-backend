@@ -182,7 +182,7 @@ const createCheckout = async (
 
         {
           amount:{
-            value: amount,
+           amount,
           currency: "ZAR",
         },
           successUrl: "https://lolisitheco.co.za/success",
