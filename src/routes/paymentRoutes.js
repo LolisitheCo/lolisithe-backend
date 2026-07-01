@@ -12,12 +12,12 @@ const verifyToken = require("../middleware/verifyToken");
 
 /* ================= CREATE CHECKOUT ================= */
 router.post(
-  "/create-checkout",
+  "/create-checkout",   // ✅ FIXED (THIS IS WHAT FRONTEND USES)
   verifyToken,
   createCheckout
 );
 
-/* ================= YOCO WEBHOOK (RAW BODY) ================= */
+/* ================= YOCO WEBHOOK ================= */
 router.post(
   "/webhook",
   express.raw({ type: "application/json" }),
